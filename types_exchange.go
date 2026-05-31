@@ -474,6 +474,7 @@ type SimMetaAsset struct {
 	Name                string               `json:"name"`
 	Dex                 string               `json:"dex,omitempty"`
 	Symbol              string               `json:"symbol"`
+	VenueSymbol         string               `json:"venueSymbol,omitempty"`
 	DisplayName         string               `json:"displayName,omitempty"`
 	LogoURL             string               `json:"logoUrl,omitempty"`
 	LogoSources         []LogoSource         `json:"logoSources,omitempty"`
