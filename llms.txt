@@ -1,0 +1,165 @@
+# Arca Go SDK — AI Context
+
+> github.com/arcaresearch/arca-go-sdk — Go SDK for the Arca financial
+> infrastructure platform (accounts, payments, perpetuals trading, real-time
+> streaming, audit trails). Hand-written port of @arcaresearch/sdk (TypeScript).
+
+go get github.com/arcaresearch/arca-go-sdk
+
+Import path is `github.com/arcaresearch/arca-go-sdk`; the package name is `arca`.
+
+## Conventions (Go-specific)
+
+- Every method takes a `context.Context` as its first argument.
+- Money/amount values are decimal strings ("50", "0.01").
+- Coin ids are canonical `{exchange}:{id}` ("hl:BTC", "hl:1:TSLA"), case-sensitive.
+- Market-data timestamps are Unix epoch ms; all others are RFC3339 UTC strings.
+- Errors are typed; use errors.As. Base type: *arca.ArcaError (has Code, Message, ErrorID).
+  Typed: *ValidationError, *UnauthorizedError, *NotFoundError, *ConflictError,
+  *InternalError, *ExchangeError, *OperationFailedError, *OperationStalledError,
+  *StepUpRequiredError, *StepUpCancelledError.
+
+## Initialization
+
+```go
+// API key (backend)
+client, _ := arca.New(arca.Config{APIKey: "arca_...", Realm: "my-realm"})
+// Scoped token (realm read from claims)
+client, _ := arca.FromToken(jwt, arca.Config{})
+// Auto-refreshing token
+client, _ := arca.FromTokenProvider(provider, arca.Config{Realm: "my-realm"})
+
+client.Ready(ctx) // resolve realm slug -> id (also lazy on first call)
+```
+
+## Operation handles
+
+Mutations return *arca.OperationHandle[T] (HTTP runs in background):
+- h.Submitted(ctx) (T, error)  — HTTP response before settlement
+- h.Wait(ctx) (T, error)       — blocks until terminal state
+- h.WaitTimeout(ctx, d)        — explicit settlement timeout
+- h.Predicted                  — *PredictedEffect (sync, optimistic)
+
+PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
+- order.Filled(ctx) (SimOrderWithFills, error)
+- order.OnFill(ctx, func(SimFill)) func()
+- order.FillSummary(ctx) (*Fill, error)
+- order.Cancel(ctx, path) (*OperationHandle[OrderOperationResponse], error)
+
+## Intent -> method
+
+| Intent | Method |
+|---|---|
+| Create wallet | client.EnsureDenominatedArca(ctx, EnsureDenominatedArcaOptions{Ref}) |
+| Create any object | client.EnsureArca(ctx, EnsureArcaOptions{Ref, Type}) |
+| Create info object | client.EnsureInfo(ctx, EnsureInfoOptions{Ref, Labels}) |
+| Delete object | client.EnsureDeleted(ctx, EnsureDeletedOptions{Ref}) |
+| Get object | client.GetObject(ctx, path) / GetObjectDetail(ctx, id) |
+| List objects | client.ListObjects(ctx, *ListObjectsOptions) |
+| Browse objects | client.BrowseObjects(ctx, *BrowseObjectsOptions) |
+| Balances | client.GetBalances(ctx, id) / GetBalancesByPath(ctx, path) |
+| Transfer | client.Transfer(ctx, TransferOptions{Path, From, To, Amount}) |
+| Fund (dev) | client.FundAccount(ctx, FundAccountOptions{ArcaRef, Amount}) |
+| Withdraw (dev) | client.DefundAccount(ctx, DefundAccountOptions{ArcaPath, Amount}) |
+| Payment link | client.CreatePaymentLink(ctx, CreatePaymentLinkOptions{Type, ArcaRef, Amount}) |
+| Estimate fee | client.EstimateFee(ctx, FeeEstimateParams{...}) |
+| Idempotency nonce | client.Nonce(ctx, path) |
+| Aggregation | client.GetPathAggregation(ctx, path, asOf) |
+| P&L | client.GetPnl(ctx, path, from, to) |
+| Equity history | client.GetEquityHistory(ctx, path, from, to, points, *HistoryScopeOptions) |
+| P&L history | client.GetPnlHistory(ctx, path, from, to, points, *PnlHistoryOptions) |
+| Operation detail | client.GetOperation(ctx, id, *GetOperationOptions) |
+| List operations | client.ListOperations(ctx, *ListOperationsOptions) |
+| Export evidence | client.ExportOperationEvidence(ctx, ExportOperationEvidenceOptions) |
+| List events | client.ListEvents(ctx, *ListEventsOptions) |
+| List deltas | client.ListDeltas(ctx, arcaPath) |
+| Wait for op | client.WaitForOperation(ctx, id, timeout) |
+| Wait for quiescence | client.WaitForQuiescence(ctx, interval, onPoll) |
+| Realm summary | client.Summary(ctx) |
+| Create exchange | client.EnsurePerpsExchange(ctx, CreatePerpsExchangeOptions{Ref}) |
+| Place order | client.PlaceOrder(ctx, PlaceOrderOptions{...}) |
+| Cancel order | client.CancelOrder(ctx, CancelOrderOptions{...}) |
+| Close position | client.ClosePosition(ctx, ClosePositionOptions{...}) |
+| List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
+| Exchange state | client.GetExchangeState(ctx, id) |
+| Active asset data | client.GetActiveAssetData(ctx, id, coin, builderFeeBps, leverage) |
+| Asset fees | client.GetAssetFees(ctx, id, builderFeeBps) |
+| Set leverage | client.UpdateLeverage(ctx, UpdateLeverageOptions{...}) |
+| Order breakdown (pure) | arca.ComputeOrderBreakdown(OrderBreakdownOptions{...}) |
+| Order limits | client.GetOrderLimits() |
+| Trade summary | client.TradeSummary(ctx, id, *TradeSummaryOptions) |
+| TWAP | client.PlaceTwap / CancelTwap / GetTwap / ListTwaps |
+| TWAP limits | client.GetTwapLimits(ctx) / RecommendedIntervalSeconds(ctx, mins) |
+| Market meta | client.GetMarketMeta(ctx) / Asset(ctx, coin) / PreloadMarketMeta(ctx) |
+| Mids/tickers/book | client.GetMarketMids / GetMarketTickers / GetOrderBook |
+| Candles | client.GetCandles(ctx, coin, interval, *GetCandlesOptions) |
+| Sparklines | client.GetSparklines(ctx) |
+| Custody status | client.GetCustodyStatus(ctx) |
+| Boundaries | client.GetBoundary / ListBoundaries / ListExchangeArcas |
+| Register recovery key | client.RegisterRecoveryKey(ctx, RegisterRecoveryKeyOptions{...}) |
+| Generate recovery key | arca.GenerateRecoveryKey() |
+| Prepare custody tx | arca.PrepareLockBoundary/PrepareWithdraw/PrepareAssignRecoveryKey/... |
+| Reconciliation | client.ListReconciliationState(ctx) |
+| Invariant check | client.CheckInvariants(ctx, limit, realmId) |
+
+## Watch streams (real-time)
+
+All return a stream with OnUpdate(cb) func(), Updates() <-chan T, Ready(ctx),
+State(), OnStateChange, Close().
+
+| Method | Stream value |
+|---|---|
+| client.WatchPrices(ctx, *WatchPricesOptions) | map[string]string (+ Get/Prices) |
+| client.WatchOperations(ctx, path) | Operation |
+| client.WatchBalances(ctx, path) | BalanceUpdate |
+| client.WatchObject(ctx, path) | ObjectValuation |
+| client.WatchObjects(ctx, paths) | map[string]ObjectValuation |
+| client.WatchAggregation(ctx, sources) | PathAggregation |
+| client.WatchExchangeState(ctx, id) | ExchangeState |
+| client.WatchFills(ctx, id, opts) | Fill |
+| client.WatchFunding(ctx, id) | FundingPayment |
+| client.WatchCandles(ctx, coins, intervals) | CandleUpdate |
+| client.WatchTrades(ctx, coins) | MarketTrade |
+| client.WatchTwap(ctx, exchangeId, opId) | Twap |
+
+Aggregation sources: arca.NewPrefixSource(p), NewPathsSource(paths),
+NewPatternSource(p), NewWatchSource(id).
+
+Lower-level access: client.WS() returns *WebSocketManager (On(type, cb),
+typed OnX listeners, OnGap, OnAuthenticated, EnsureConnected, Disconnect).
+
+## Admin (realm-less builder client)
+
+```go
+admin := arca.NewAdmin(arca.AdminConfig{Token: builderJWT})
+admin.SignInWithGoogle / GetMe / Refresh / Logout
+admin.MintToken / MintDeviceToken
+admin.CreateRealm / ListRealms / GetRealm / DeleteRealm / UpdateRealmSettings
+admin.CreateApiKey / ListApiKeys / RevokeApiKey
+admin.ListMyOrgs / CreateOrg / GetOrg / GetActiveTerms / AcceptTerms
+admin.ListMembers / UpdateMember / RemoveMember / InviteMember / ListInvitations
+admin.GetCredentialScope / ListAuthAuditLog / TransferOwnership
+```
+
+## Step-up auth (412)
+
+Set arca.Config.StepUpHandler (or admin SetStepUpHandler):
+func(ctx, arca.StepUpChallenge) (string, error) — return a single-use step-up
+JWT. The SDK retries once and never persists it. Returning an error surfaces
+*StepUpCancelledError.
+
+## Anti-patterns
+
+1. Reuse a nonce path on retry; do not call Nonce inside a retry loop.
+2. Always Ready(ctx) (or call any method, which is lazy) before relying on realm id.
+3. Use canonical coin ids ("hl:BTC", never "BTC").
+4. FundAccount/DefundAccount are dev-only; use CreatePaymentLink in production.
+5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
+6. HIP-3 markets (onlyIsolated) require Isolated:true + positive Leverage on PlaceOrder.
+
+## Not yet ported (REST equivalents available)
+
+Merged chart streams (WatchEquityChart/WatchPnlChart/WatchCandleChart) and the
+derived WatchMaxOrderSize are not in this release. Use GetEquityHistory,
+GetPnlHistory, GetCandles plus the arca ladder helpers (PickResolution,
+BucketMs, ComputeChartRange) and WatchAggregation to build equivalent behavior.
