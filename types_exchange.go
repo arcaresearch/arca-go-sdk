@@ -490,7 +490,16 @@ type SimMetaAsset struct {
 	Index               int                  `json:"index"`
 	SzDecimals          int                  `json:"szDecimals"`
 	MaxLeverage         int                  `json:"maxLeverage"`
-	OnlyIsolated        bool                 `json:"onlyIsolated"`
+	// OnlyIsolated is Hyperliquid-specific and deprecated in favor of
+	// MarginModes. OnlyIsolated==true is equivalent to MarginModes
+	// being ["isolated"]. Independent of HIP-3 — some HIP-3 markets
+	// (e.g. hl:1:TSLA) are cross-eligible.
+	OnlyIsolated bool `json:"onlyIsolated"`
+	// MarginModes is the explicit, exchange-agnostic set of margin modes
+	// the asset supports: ["isolated"] for isolated-only markets,
+	// ["cross","isolated"] otherwise. Read this instead of inferring from
+	// OnlyIsolated or IsHip3. May be nil when served by an older backend.
+	MarginModes         []string             `json:"marginModes,omitempty"`
 	FeeScale            float64              `json:"feeScale,omitempty"`
 	MarginTableID       int                  `json:"marginTableId,omitempty"`
 	CandleHistory       *CandleHistoryBounds `json:"candleHistory,omitempty"`
