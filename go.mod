@@ -2,6 +2,10 @@ module github.com/arcaresearch/arca-go-sdk
 
 go 1.25.0
 
+// v0.1.0 was published under the MIT license in error. Use v0.1.1+, which is
+// licensed under the PolyForm Shield License 1.0.0 (see LICENSE).
+retract v0.1.0
+
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1

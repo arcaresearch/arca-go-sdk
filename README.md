@@ -210,3 +210,9 @@ helpers are available today.
 GOWORK=off go test ./...
 GOWORK=off go vet ./...
 ```
+
+## License
+
+Licensed under the [PolyForm Shield License 1.0.0](./LICENSE). You may use,
+modify, and redistribute this SDK for any purpose **except** building a product
+or service that competes with Arca. See the LICENSE file for the full terms.
