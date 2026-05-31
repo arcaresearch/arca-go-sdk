@@ -478,6 +478,12 @@ type SimMetaAsset struct {
 	LogoURL             string               `json:"logoUrl,omitempty"`
 	LogoSources         []LogoSource         `json:"logoSources,omitempty"`
 	Exchange            string               `json:"exchange"`
+	AssetType           string               `json:"assetType,omitempty"`
+	CategoryLabel       string               `json:"categoryLabel,omitempty"`
+	Mapped              bool                 `json:"mapped"`
+	HasDisplayName      bool                 `json:"hasDisplayName"`
+	HasLogo             bool                 `json:"hasLogo"`
+	DescriptionStatus   string               `json:"descriptionStatus,omitempty"`
 	IsHip3              bool                 `json:"isHip3,omitempty"`
 	DeployerDisplayName string               `json:"deployerDisplayName,omitempty"`
 	Index               int                  `json:"index"`
