@@ -456,3 +456,106 @@ func TestChunksForRange_Daily(t *testing.T) {
 func base64URL(s string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
+
+func TestUpdateIsolatedMargin_PostsToEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeEnvelope(w, 200, UpdateIsolatedMarginResponse{
+			AccountID: "act_1", Coin: "hl:1:CL", IsolatedMargin: "125", LiquidationPrice: "50",
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	resp, err := a.UpdateIsolatedMargin(context.Background(), UpdateIsolatedMarginOptions{
+		ObjectID: "obj_1", Coin: "hl:1:CL", Amount: "25",
+	})
+	if err != nil {
+		t.Fatalf("UpdateIsolatedMargin: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotPath != "/api/v1/objects/obj_1/exchange/isolated-margin" {
+		t.Errorf("path = %s", gotPath)
+	}
+	if gotBody["coin"] != "hl:1:CL" || gotBody["amount"] != "25" {
+		t.Errorf("body = %+v", gotBody)
+	}
+	if resp.IsolatedMargin != "125" || resp.LiquidationPrice != "50" {
+		t.Errorf("resp = %+v", resp)
+	}
+}
+
+func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeEnvelope(w, 200, SetMarginModeResponse{AccountID: "act_1", Coin: "hl:BTC", MarginMode: MarginModeIsolated})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	resp, err := a.SetMarginMode(context.Background(), SetMarginModeOptions{
+		ObjectID: "obj_1", Coin: "hl:BTC", MarginMode: MarginModeIsolated,
+	})
+	if err != nil {
+		t.Fatalf("SetMarginMode: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %s, want POST", gotMethod)
+	}
+	if gotPath != "/api/v1/objects/obj_1/exchange/margin-mode" {
+		t.Errorf("path = %s", gotPath)
+	}
+	if gotBody["coin"] != "hl:BTC" {
+		t.Errorf("body coin = %v", gotBody["coin"])
+	}
+	if gotBody["marginMode"] != "isolated" {
+		t.Errorf("body marginMode = %v", gotBody["marginMode"])
+	}
+	if resp.MarginMode != MarginModeIsolated || resp.Coin != "hl:BTC" {
+		t.Errorf("resp = %+v", resp)
+	}
+}
+
+func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
+	raw := `{"id":"sps_1","accountId":"act_1","realmId":"rlm_1","coin":"hl:1:CL",` +
+		`"side":"long","size":"1","entryPrice":"50","leverage":5,"marginUsed":"10",` +
+		`"marginMode":"isolated","isolatedMargin":"125","liquidationPrice":"40"}`
+	var p SimPosition
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("unmarshal isolated: %v", err)
+	}
+	if p.MarginMode != MarginModeIsolated {
+		t.Errorf("MarginMode = %q, want isolated", p.MarginMode)
+	}
+	if p.IsolatedMargin == nil || *p.IsolatedMargin != "125" {
+		t.Errorf("IsolatedMargin = %v", p.IsolatedMargin)
+	}
+
+	// Cross position: marginMode cross, isolatedMargin omitted entirely.
+	var cross SimPosition
+	if err := json.Unmarshal([]byte(`{"id":"sps_2","coin":"hl:BTC","marginMode":"cross"}`), &cross); err != nil {
+		t.Fatalf("unmarshal cross: %v", err)
+	}
+	if cross.MarginMode != MarginModeCross || cross.IsolatedMargin != nil {
+		t.Errorf("cross position parsed isolated: %+v", cross)
+	}
+
+	// LeverageSetting carries the asset's margin mode.
+	var ls LeverageSetting
+	if err := json.Unmarshal([]byte(`{"coin":"hl:1:CL","leverage":5,"marginMode":"isolated"}`), &ls); err != nil {
+		t.Fatalf("unmarshal leverage: %v", err)
+	}
+	if ls.MarginMode != MarginModeIsolated {
+		t.Errorf("LeverageSetting.MarginMode = %q", ls.MarginMode)
+	}
+}

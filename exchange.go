@@ -85,6 +85,36 @@ func (a *Arca) UpdateLeverage(ctx context.Context, opts UpdateLeverageOptions) (
 	return out, err
 }
 
+// UpdateIsolatedMargin adds or removes collateral from an isolated-margin
+// position. A positive Amount (decimal USD string) moves balance into the
+// position, lowering its liquidation price; a negative Amount removes
+// collateral, raising it. Removal is rejected if it would drop the position
+// below its maintenance margin. Only valid on isolated positions.
+func (a *Arca) UpdateIsolatedMargin(ctx context.Context, opts UpdateIsolatedMarginOptions) (UpdateIsolatedMarginResponse, error) {
+	var out UpdateIsolatedMarginResponse
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/isolated-margin",
+		map[string]any{"coin": opts.Coin, "amount": opts.Amount}, &out)
+	return out, err
+}
+
+// SetMarginMode switches an asset between cross and isolated margin for an
+// exchange object. Rejected on isolated-only (HIP-3) markets and while an open
+// position exists for the asset — close the position first. Leverage is
+// remembered per mode, so switching restores the leverage last set for that
+// mode.
+func (a *Arca) SetMarginMode(ctx context.Context, opts SetMarginModeOptions) (SetMarginModeResponse, error) {
+	var out SetMarginModeResponse
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/margin-mode",
+		map[string]any{"coin": opts.Coin, "marginMode": opts.MarginMode}, &out)
+	return out, err
+}
+
 // ListLeverageSettings returns all per-coin leverage settings for an exchange
 // object.
 func (a *Arca) ListLeverageSettings(ctx context.Context, objectID string) ([]LeverageSetting, error) {

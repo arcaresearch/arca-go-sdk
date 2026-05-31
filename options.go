@@ -201,6 +201,23 @@ type UpdateLeverageOptions struct {
 	Leverage int
 }
 
+// UpdateIsolatedMarginOptions parameterizes UpdateIsolatedMargin. Amount is a
+// signed decimal USD string: positive adds collateral to the isolated position
+// (lowering its liquidation price), negative removes it (raising it).
+type UpdateIsolatedMarginOptions struct {
+	ObjectID string
+	Coin     string
+	Amount   string
+}
+
+// SetMarginModeOptions parameterizes SetMarginMode. MarginMode switches the
+// asset to cross or isolated margin.
+type SetMarginModeOptions struct {
+	ObjectID   string
+	Coin       string
+	MarginMode MarginMode
+}
+
 type PlaceTwapOptions struct {
 	Path            string
 	ExchangeID      string

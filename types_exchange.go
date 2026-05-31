@@ -36,6 +36,13 @@ const (
 	LeverageIsolated LeverageType = "isolated"
 )
 
+type MarginMode string
+
+const (
+	MarginModeCross    MarginMode = "cross"
+	MarginModeIsolated MarginMode = "isolated"
+)
+
 type FeeTarget struct {
 	ArcaPath   string `json:"arcaPath"`
 	Percentage int    `json:"percentage"`
@@ -72,27 +79,35 @@ type SimMarginSummary struct {
 }
 
 type SimPosition struct {
-	ID                    string       `json:"id"`
-	AccountID             string       `json:"accountId"`
-	RealmID               string       `json:"realmId"`
-	Coin                  string       `json:"coin"`
-	Side                  PositionSide `json:"side"`
-	Size                  string       `json:"size"`
-	EntryPrice            string       `json:"entryPrice"`
-	Leverage              int          `json:"leverage"`
-	MarginUsed            string       `json:"marginUsed"`
-	LiquidationPrice      *string      `json:"liquidationPrice"`
-	UnrealizedPnl         *string      `json:"unrealizedPnl"`
-	ReturnOnEquity        *string      `json:"returnOnEquity"`
-	PositionValue         *string      `json:"positionValue"`
-	CumulativeFunding     *string      `json:"cumulativeFunding,omitempty"`
-	CumulativeFee         *string      `json:"cumulativeFee,omitempty"`
-	CumulativeExchangeFee *string      `json:"cumulativeExchangeFee,omitempty"`
-	CumulativePlatformFee *string      `json:"cumulativePlatformFee,omitempty"`
-	CumulativeBuilderFee  *string      `json:"cumulativeBuilderFee,omitempty"`
-	Error                 *string      `json:"error,omitempty"`
-	CreatedAt             string       `json:"createdAt"`
-	UpdatedAt             string       `json:"updatedAt"`
+	ID         string       `json:"id"`
+	AccountID  string       `json:"accountId"`
+	RealmID    string       `json:"realmId"`
+	Coin       string       `json:"coin"`
+	Side       PositionSide `json:"side"`
+	Size       string       `json:"size"`
+	EntryPrice string       `json:"entryPrice"`
+	Leverage   int          `json:"leverage"`
+	MarginUsed string       `json:"marginUsed"`
+	// MarginMode is "cross" or "isolated". Isolated positions carry their own
+	// dedicated collateral (IsolatedMargin) and are liquidated independently of
+	// the cross pool.
+	MarginMode MarginMode `json:"marginMode"`
+	// IsolatedMargin is the locked collateral for an isolated position (decimal
+	// string). May exceed the leverage-implied margin after UpdateIsolatedMargin.
+	// Nil for cross positions.
+	IsolatedMargin        *string `json:"isolatedMargin,omitempty"`
+	LiquidationPrice      *string `json:"liquidationPrice"`
+	UnrealizedPnl         *string `json:"unrealizedPnl"`
+	ReturnOnEquity        *string `json:"returnOnEquity"`
+	PositionValue         *string `json:"positionValue"`
+	CumulativeFunding     *string `json:"cumulativeFunding,omitempty"`
+	CumulativeFee         *string `json:"cumulativeFee,omitempty"`
+	CumulativeExchangeFee *string `json:"cumulativeExchangeFee,omitempty"`
+	CumulativePlatformFee *string `json:"cumulativePlatformFee,omitempty"`
+	CumulativeBuilderFee  *string `json:"cumulativeBuilderFee,omitempty"`
+	Error                 *string `json:"error,omitempty"`
+	CreatedAt             string  `json:"createdAt"`
+	UpdatedAt             string  `json:"updatedAt"`
 }
 
 type PositionListResponse struct {
@@ -325,8 +340,26 @@ type UpdateLeverageResponse struct {
 }
 
 type LeverageSetting struct {
-	Coin     string `json:"coin"`
-	Leverage int    `json:"leverage"`
+	Coin       string     `json:"coin"`
+	Leverage   int        `json:"leverage"`
+	MarginMode MarginMode `json:"marginMode"`
+}
+
+// UpdateIsolatedMarginResponse is returned by UpdateIsolatedMargin: the
+// resulting locked isolated collateral and recomputed liquidation price.
+type UpdateIsolatedMarginResponse struct {
+	AccountID        string `json:"accountId"`
+	Coin             string `json:"coin"`
+	IsolatedMargin   string `json:"isolatedMargin"`
+	LiquidationPrice string `json:"liquidationPrice"`
+}
+
+// SetMarginModeResponse is returned by SetMarginMode with the asset's new
+// margin mode.
+type SetMarginModeResponse struct {
+	AccountID  string     `json:"accountId"`
+	Coin       string     `json:"coin"`
+	MarginMode MarginMode `json:"marginMode"`
 }
 
 // ---- TWAP ----
