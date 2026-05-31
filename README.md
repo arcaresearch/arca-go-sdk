@@ -10,10 +10,17 @@ streams.
 ## Install
 
 ```bash
-go get github.com/arcaresearch/arca-go-sdk
+go get github.com/arcaresearch/arca-go-sdk@latest
 ```
 
-Requires Go 1.23+.
+```go
+import arca "github.com/arcaresearch/arca-go-sdk"
+```
+
+Requires Go 1.23+. It's a public module published from
+[`github.com/arcaresearch/arca-go-sdk`](https://github.com/arcaresearch/arca-go-sdk),
+so no `GOPRIVATE` or auth is needed. Pin a specific release with
+`@vX.Y.Z` (e.g. `@v0.1.1`); `v0.1.0` is retracted (see [RELEASING.md](./RELEASING.md)).
 
 ## Quick start
 
@@ -210,3 +217,9 @@ helpers are available today.
 GOWORK=off go test ./...
 GOWORK=off go vet ./...
 ```
+
+## License
+
+Licensed under the [PolyForm Shield License 1.0.0](./LICENSE). You may use,
+modify, and redistribute this SDK for any purpose **except** building a product
+or service that competes with Arca. See the LICENSE file for the full terms.
