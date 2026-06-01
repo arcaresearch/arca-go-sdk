@@ -330,6 +330,12 @@ type ActiveAssetData struct {
 	FeeRate               string       `json:"feeRate"`
 	MaintenanceMarginRate string       `json:"maintenanceMarginRate"`
 	MarginTiers           []MarginTier `json:"marginTiers,omitempty"`
+	// BidPx / AskPx are the top-of-book best bid / best ask at snapshot time.
+	// Market sells are margin-checked at the bid, buys at the ask, so these are
+	// the directional execution prices behind MaxSellSize / MaxBuySize. Equal to
+	// MarkPx when no order book is available.
+	BidPx string `json:"bidPx"`
+	AskPx string `json:"askPx"`
 }
 
 type UpdateLeverageResponse struct {
