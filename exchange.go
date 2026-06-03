@@ -404,6 +404,222 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
 }
 
+// SetStopLoss attaches a stop-loss to the open position for opts.Coin. The
+// order is placed with grouping=positionTpsl, reduceOnly, size 0 (the venue
+// fills it from the live position and resizes it as the position changes), and
+// the closing side inferred from the position (LONG → SELL, SHORT → BUY). By
+// default any existing stop-loss for the position is replaced; set Replace to a
+// pointer to false to stack. Returns an OrderHandle — Wait blocks until the
+// trigger is resting (WAITING_FOR_TRIGGER); OnFill fires when it executes.
+func (a *Arca) SetStopLoss(ctx context.Context, opts SetPositionTriggerOptions) *OrderHandle {
+	return a.setPositionTrigger(ctx, exTpslStopLoss, opts)
+}
+
+// SetTakeProfit attaches a take-profit to the open position for opts.Coin. The
+// position-attached counterpart of SetStopLoss; see it for placement semantics.
+func (a *Arca) SetTakeProfit(ctx context.Context, opts SetPositionTriggerOptions) *OrderHandle {
+	return a.setPositionTrigger(ctx, exTpslTakeProfit, opts)
+}
+
+const (
+	exTpslStopLoss    = "sl"
+	exTpslTakeProfit  = "tp"
+	exGroupingPosTpsl = "positionTpsl"
+)
+
+func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPositionTriggerOptions) *OrderHandle {
+	call := func() (OrderOperationResponse, error) {
+		var resp OrderOperationResponse
+		isMarket := true
+		if opts.IsMarket != nil {
+			isMarket = *opts.IsMarket
+		}
+		if !isMarket && opts.LimitPrice == "" {
+			return resp, &ValidationError{newArcaError("VALIDATION_ERROR",
+				"trigger-limit orders require a LimitPrice (leave IsMarket nil for a market trigger)", "")}
+		}
+		if opts.TriggerPx == "" {
+			return resp, &ValidationError{newArcaError("VALIDATION_ERROR", "TriggerPx is required", "")}
+		}
+		side, leverage, isolated, err := a.inferPositionCloseParams(ctx, opts.ObjectID, opts.Coin, opts.Leverage, opts.Isolated)
+		if err != nil {
+			return resp, err
+		}
+		if opts.Replace == nil || *opts.Replace {
+			existing, ferr := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Coin, tpsl)
+			if ferr != nil {
+				return resp, ferr
+			}
+			for _, o := range existing {
+				if _, cerr := a.CancelOrder(ctx, CancelOrderOptions{
+					ObjectID: opts.ObjectID, OrderID: o.ID, Path: opts.Path + "/replace-" + o.ID,
+				}).Submitted(ctx); cerr != nil {
+					return resp, cerr
+				}
+			}
+		}
+		if err := a.ensureReady(ctx); err != nil {
+			return resp, err
+		}
+		orderType := "MARKET"
+		if !isMarket {
+			orderType = "LIMIT"
+		}
+		body := map[string]any{
+			"realmId":     a.currentRealmID(),
+			"path":        opts.Path,
+			"coin":        opts.Coin,
+			"side":        side,
+			"orderType":   orderType,
+			"size":        "0",
+			"reduceOnly":  true,
+			"timeInForce": defaultStr(opts.TimeInForce, "GTC"),
+			"isTrigger":   true,
+			"triggerPx":   opts.TriggerPx,
+			"isMarket":    isMarket,
+			"tpsl":        tpsl,
+			"grouping":    exGroupingPosTpsl,
+		}
+		if !isMarket {
+			body["price"] = opts.LimitPrice
+		}
+		if leverage > 0 {
+			body["leverage"] = leverage
+		}
+		if isolated {
+			body["isolated"] = true
+		}
+		if opts.BuilderFeeBps != nil {
+			body["builderFeeBps"] = *opts.BuilderFeeBps
+		}
+		if opts.FeeTargets != nil {
+			body["feeTargets"] = opts.FeeTargets
+		}
+		if err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/orders", body, &resp); err != nil {
+			return resp, err
+		}
+		if resp.Operation.State == OpFailed || resp.Operation.State == OpExpired {
+			return resp, newOperationFailedError(resp.Operation.snapshot())
+		}
+		return resp, nil
+	}
+	base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
+		func(c context.Context, id string, t time.Duration) (*Operation, error) {
+			return a.waitForOperation(c, id, t)
+		},
+		nil, 0)
+	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+}
+
+// SetPositionTpsl attaches a stop-loss and/or take-profit to an open position
+// in one call. At least one of StopLossPx / TakeProfitPx must be set. The legs
+// are placed sequentially (SL then TP); a placement failure surfaces
+// immediately. Returns the handles for the placed legs.
+func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions) (SetPositionTpslResult, error) {
+	var result SetPositionTpslResult
+	if opts.StopLossPx == "" && opts.TakeProfitPx == "" {
+		return result, &ValidationError{newArcaError("VALIDATION_ERROR",
+			"SetPositionTpsl requires at least one of StopLossPx or TakeProfitPx", "")}
+	}
+	if opts.StopLossPx != "" {
+		sl := a.SetStopLoss(ctx, SetPositionTriggerOptions{
+			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Coin: opts.Coin,
+			TriggerPx: opts.StopLossPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
+			BuilderFeeBps: opts.BuilderFeeBps, FeeTargets: opts.FeeTargets,
+		})
+		if _, err := sl.Submitted(ctx); err != nil {
+			return result, err
+		}
+		result.StopLoss = sl
+	}
+	if opts.TakeProfitPx != "" {
+		tp := a.SetTakeProfit(ctx, SetPositionTriggerOptions{
+			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Coin: opts.Coin,
+			TriggerPx: opts.TakeProfitPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
+			BuilderFeeBps: opts.BuilderFeeBps, FeeTargets: opts.FeeTargets,
+		})
+		if _, err := tp.Submitted(ctx); err != nil {
+			return result, err
+		}
+		result.TakeProfit = tp
+	}
+	return result, nil
+}
+
+// ClearPositionTpsl cancels resting positionTpsl trigger orders for opts.Coin.
+// Tpsl ("tp"/"sl") narrows the clear to one leg; empty clears both. Returns the
+// orders that were targeted for cancellation.
+func (a *Arca) ClearPositionTpsl(ctx context.Context, opts ClearPositionTpslOptions) ([]SimOrder, error) {
+	existing, err := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Coin, opts.Tpsl)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range existing {
+		if _, cerr := a.CancelOrder(ctx, CancelOrderOptions{
+			ObjectID: opts.ObjectID, OrderID: o.ID, Path: opts.Path + "/" + o.ID,
+		}).Submitted(ctx); cerr != nil {
+			return existing, cerr
+		}
+	}
+	return existing, nil
+}
+
+// inferPositionCloseParams looks up the open position for coin and derives the
+// closing side, leverage, and isolated flag — the parameters a reduce-only
+// close/trigger order needs to identify the right Hyperliquid bucket. Optional
+// overrides win over the inferred values.
+func (a *Arca) inferPositionCloseParams(ctx context.Context, objectID, coin string, leverageOverride *int, isolatedOverride *bool) (OrderSide, int, bool, error) {
+	positions, err := a.ListPositions(ctx, objectID)
+	if err != nil {
+		return "", 0, false, err
+	}
+	var position *SimPosition
+	for i := range positions {
+		if positions[i].Coin == coin {
+			position = &positions[i]
+			break
+		}
+	}
+	if position == nil {
+		return "", 0, false, &NotFoundError{newArcaError("NOT_FOUND", "No open position for "+coin, "")}
+	}
+	side := Buy
+	if position.Side == Long {
+		side = Sell
+	}
+	leverage := position.Leverage
+	if leverageOverride != nil {
+		leverage = *leverageOverride
+	}
+	isolated := false
+	if isolatedOverride != nil {
+		isolated = *isolatedOverride
+	} else if meta, merr := a.Asset(ctx, coin); merr == nil && meta != nil {
+		if len(meta.MarginModes) > 0 {
+			isolated = len(meta.MarginModes) == 1 && meta.MarginModes[0] == "isolated"
+		} else {
+			isolated = meta.OnlyIsolated
+		}
+	}
+	return side, leverage, isolated, nil
+}
+
+// findPositionTpslOrders returns resting positionTpsl trigger orders for coin,
+// optionally narrowed to a single tp/sl leg.
+func (a *Arca) findPositionTpslOrders(ctx context.Context, objectID, coin, tpsl string) ([]SimOrder, error) {
+	orders, err := a.ListOrders(ctx, objectID, string(OrderWaitingTrigger))
+	if err != nil {
+		return nil, err
+	}
+	var out []SimOrder
+	for _, o := range orders {
+		if o.Coin == coin && o.Grouping == exGroupingPosTpsl && (tpsl == "" || o.Tpsl == tpsl) {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
 // ListFills lists historical fills for an exchange object.
 func (a *Arca) ListFills(ctx context.Context, objectID string, opts *ListFillsOptions) (FillListResponse, error) {
 	var out FillListResponse
