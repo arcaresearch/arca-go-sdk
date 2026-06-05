@@ -2,7 +2,7 @@
 
 > github.com/arca-network/arca-go-sdk — Go SDK for the Arca financial
 > infrastructure platform (accounts, payments, perpetuals trading, real-time
-> streaming, audit trails). Hand-written port of @arcaresearch/sdk (TypeScript).
+> streaming, audit trails). Hand-written port of @arca-network/sdk (TypeScript).
 
 go get github.com/arca-network/arca-go-sdk
 
