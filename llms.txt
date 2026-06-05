@@ -12,7 +12,7 @@ Import path is `github.com/arca-network/arca-go-sdk`; the package name is `arca`
 
 - Every method takes a `context.Context` as its first argument.
 - Money/amount values are decimal strings ("50", "0.01").
-- Coin ids are canonical `{exchange}:{id}` ("hl:BTC", "hl:1:TSLA"), case-sensitive.
+- Coin ids are canonical `{exchange}:{id}` ("hl:0:BTC", "hl:1:TSLA"), case-sensitive.
 - Market-data timestamps are Unix epoch ms; all others are RFC3339 UTC strings.
 - Errors are typed; use errors.As. Base type: *arca.ArcaError (has Code, Message, ErrorID).
   Typed: *ValidationError, *UnauthorizedError, *NotFoundError, *ConflictError,
@@ -92,7 +92,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Trade summary | client.TradeSummary(ctx, id, *TradeSummaryOptions) |
 | TWAP | client.PlaceTwap / CancelTwap / GetTwap / ListTwaps |
 | TWAP limits | client.GetTwapLimits(ctx) / RecommendedIntervalSeconds(ctx, mins) |
-| Market meta | client.GetMarketMeta(ctx) / Asset(ctx, coin) / PreloadMarketMeta(ctx) |
+| Market meta | client.GetMarketMeta(ctx) / Market(ctx, id) / ResolveMarkets(ctx, symbol, *opts) / ResolveMarket(ctx, symbol, *opts) / PreloadMarketMeta(ctx) |
 | Mids/tickers/book | client.GetMarketMids / GetMarketTickers / GetOrderBook |
 | Candles | client.GetCandles(ctx, coin, interval, *GetCandlesOptions) |
 | Sparklines | client.GetSparklines(ctx) |
@@ -154,7 +154,7 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 
 1. Reuse a nonce path on retry; do not call Nonce inside a retry loop.
 2. Always Ready(ctx) (or call any method, which is lazy) before relying on realm id.
-3. Use canonical coin ids ("hl:BTC", never "BTC").
+3. Use canonical coin ids ("hl:0:BTC", never "BTC").
 4. FundAccount/DefundAccount are dev-only; use CreatePaymentLink in production.
 5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
 6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage on PlaceOrder. Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
