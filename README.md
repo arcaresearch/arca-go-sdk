@@ -141,9 +141,9 @@ Watch streams expose `OnUpdate(cb) func()`, an `Updates() <-chan T` channel,
 `Ready(ctx)`, `State()`, and `Close()`:
 
 ```go
-prices, _ := client.WatchPrices(ctx, &arca.WatchPricesOptions{Coins: []string{"hl:BTC"}})
+prices, _ := client.WatchPrices(ctx, &arca.WatchPricesOptions{Coins: []string{"hl:0:BTC"}})
 defer prices.Close()
-px, _ := prices.Get("hl:BTC") // read on demand, snapshot is pre-loaded
+px, _ := prices.Get("hl:0:BTC") // read on demand, snapshot is pre-loaded
 prices.OnUpdate(func(m map[string]string) { /* tick */ })
 ```
 
@@ -159,7 +159,7 @@ ex, _ := client.EnsurePerpsExchange(ctx, arca.CreatePerpsExchangeOptions{Ref: "/
 nonce, _ := client.Nonce(ctx, "/op/order/btc")
 order := client.PlaceOrder(ctx, arca.PlaceOrderOptions{
 	Path: nonce.Path, ObjectID: ex.Object.ID,
-	Coin: "hl:BTC", Side: arca.Buy, OrderType: "MARKET", Size: "0.01",
+	Coin: "hl:0:BTC", Side: arca.Buy, OrderType: "MARKET", Size: "0.01",
 })
 if _, err := order.Wait(ctx); err != nil { /* placement failed */ }
 fill, _ := order.Filled(ctx)
@@ -197,7 +197,7 @@ client.RegisterRecoveryKey(ctx, arca.RegisterRecoveryKeyOptions{BoundaryID: "b0"
 ## Conventions
 
 - **Money** values are decimal strings (e.g. `"50"`, `"0.01"`).
-- **Coin** ids are canonical `{exchange}:{id}` (`"hl:BTC"`, `"hl:1:TSLA"`) —
+- **Coin** ids are canonical `{exchange}:{id}` (`"hl:0:BTC"`, `"hl:1:TSLA"`) —
   case-sensitive, never bare symbols.
 - **Market-data** timestamps are Unix epoch milliseconds; all other timestamps
   are RFC3339 UTC strings.

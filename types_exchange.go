@@ -5,15 +5,15 @@ package arca
 type OrderSide string
 
 const (
-	Buy  OrderSide = "BUY"
-	Sell OrderSide = "SELL"
+	Buy  OrderSide = "buy"
+	Sell OrderSide = "sell"
 )
 
 type PositionSide string
 
 const (
-	Long  PositionSide = "LONG"
-	Short PositionSide = "SHORT"
+	Long  PositionSide = "long"
+	Short PositionSide = "short"
 )
 
 type OrderStatus string
@@ -200,7 +200,7 @@ type Fill struct {
 	Side              OrderSide              `json:"side,omitempty"`
 	Size              string                 `json:"size,omitempty"`
 	Price             string                 `json:"price,omitempty"`
-	Dir               string                 `json:"dir,omitempty"`
+	Direction         string                 `json:"direction,omitempty"`
 	StartPosition     string                 `json:"startPosition,omitempty"`
 	Fee               string                 `json:"fee,omitempty"`
 	ExchangeFee       string                 `json:"exchangeFee,omitempty"`

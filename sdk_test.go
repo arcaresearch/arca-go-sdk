@@ -498,13 +498,13 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		writeEnvelope(w, 200, SetMarginModeResponse{AccountID: "act_1", Market: "hl:BTC", MarginMode: MarginModeIsolated})
+		writeEnvelope(w, 200, SetMarginModeResponse{AccountID: "act_1", Market: "hl:0:BTC", MarginMode: MarginModeIsolated})
 	}))
 	defer srv.Close()
 
 	a := newTestArca(t, srv.URL)
 	resp, err := a.SetMarginMode(context.Background(), SetMarginModeOptions{
-		ObjectID: "obj_1", Market: "hl:BTC", MarginMode: MarginModeIsolated,
+		ObjectID: "obj_1", Market: "hl:0:BTC", MarginMode: MarginModeIsolated,
 	})
 	if err != nil {
 		t.Fatalf("SetMarginMode: %v", err)
@@ -515,13 +515,13 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 	if gotPath != "/api/v1/objects/obj_1/exchange/margin-mode" {
 		t.Errorf("path = %s", gotPath)
 	}
-	if gotBody["coin"] != "hl:BTC" {
+	if gotBody["coin"] != "hl:0:BTC" {
 		t.Errorf("body coin = %v", gotBody["coin"])
 	}
 	if gotBody["marginMode"] != "isolated" {
 		t.Errorf("body marginMode = %v", gotBody["marginMode"])
 	}
-	if resp.MarginMode != MarginModeIsolated || resp.Market != "hl:BTC" {
+	if resp.MarginMode != MarginModeIsolated || resp.Market != "hl:0:BTC" {
 		t.Errorf("resp = %+v", resp)
 	}
 }
@@ -543,7 +543,7 @@ func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
 
 	// Cross position: marginMode cross, isolatedMargin omitted entirely.
 	var cross SimPosition
-	if err := json.Unmarshal([]byte(`{"id":"sps_2","coin":"hl:BTC","marginMode":"cross"}`), &cross); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"sps_2","coin":"hl:0:BTC","marginMode":"cross"}`), &cross); err != nil {
 		t.Fatalf("unmarshal cross: %v", err)
 	}
 	if cross.MarginMode != MarginModeCross || cross.IsolatedMargin != nil {

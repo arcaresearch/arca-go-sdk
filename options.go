@@ -202,7 +202,7 @@ type ClosePositionOptions struct {
 
 // SetPositionTriggerOptions parameterizes SetStopLoss / SetTakeProfit. The
 // trigger is attached to the open position for Coin: the closing side is
-// inferred (LONG → SELL, SHORT → BUY), Grouping is positionTpsl, ReduceOnly is
+// inferred (long → sell, short → buy), Grouping is positionTpsl, ReduceOnly is
 // set, and Size is "0" so the venue fills the trigger from — and resizes it
 // with — the live position.
 type SetPositionTriggerOptions struct {

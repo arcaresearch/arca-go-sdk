@@ -3,7 +3,7 @@ package arca
 // This file mirrors sdk/typescript/src/types.ts. Money/amount fields are
 // decimal strings; market-data timestamps are Unix epoch milliseconds; all
 // other timestamps are RFC3339 UTC strings. Coin identifiers are canonical
-// "{exchange}:{id}" values (e.g. "hl:BTC", "hl:1:TSLA").
+// "{exchange}:{id}" values (e.g. "hl:0:BTC", "hl:1:TSLA").
 
 // ---- Realm ----
 

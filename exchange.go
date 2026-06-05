@@ -412,7 +412,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 // SetStopLoss attaches a stop-loss to the open position for opts.Coin. The
 // order is placed with grouping=positionTpsl, reduceOnly, size 0 (the venue
 // fills it from the live position and resizes it as the position changes), and
-// the closing side inferred from the position (LONG → SELL, SHORT → BUY). By
+// the closing side inferred from the position (long → sell, short → buy). By
 // default any existing stop-loss for the position is replaced; set Replace to a
 // pointer to false to stack. Returns an OrderHandle — Wait blocks until the
 // trigger is resting (WAITING_FOR_TRIGGER); OnFill fires when it executes.
