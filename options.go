@@ -164,7 +164,7 @@ type CreatePerpsExchangeOptions struct {
 type PlaceOrderOptions struct {
 	Path        string
 	ObjectID    string
-	Coin        string
+	Market        string
 	Side        OrderSide
 	OrderType   string // "MARKET" or "LIMIT"
 	Size        string
@@ -189,7 +189,7 @@ type PlaceOrderOptions struct {
 type ClosePositionOptions struct {
 	Path        string
 	ObjectID    string
-	Coin        string
+	Market        string
 	Size        string
 	TimeInForce string
 	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
@@ -208,7 +208,7 @@ type ClosePositionOptions struct {
 type SetPositionTriggerOptions struct {
 	Path     string
 	ObjectID string
-	Coin     string
+	Market     string
 	// TriggerPx is the mark-price threshold that activates the order (required).
 	TriggerPx string
 	// IsMarket controls execution when the trigger fires: market (default) or
@@ -239,7 +239,7 @@ type SetPositionTriggerOptions struct {
 type SetPositionTpslOptions struct {
 	Path         string
 	ObjectID     string
-	Coin         string
+	Market         string
 	StopLossPx   string
 	TakeProfitPx string
 	IsMarket     *bool
@@ -262,7 +262,7 @@ type SetPositionTpslResult struct {
 type ClearPositionTpslOptions struct {
 	Path     string
 	ObjectID string
-	Coin     string
+	Market     string
 	Tpsl     string
 }
 
@@ -274,7 +274,7 @@ type CancelOrderOptions struct {
 
 type UpdateLeverageOptions struct {
 	ObjectID string
-	Coin     string
+	Market     string
 	Leverage int
 }
 
@@ -283,7 +283,7 @@ type UpdateLeverageOptions struct {
 // (lowering its liquidation price), negative removes it (raising it).
 type UpdateIsolatedMarginOptions struct {
 	ObjectID string
-	Coin     string
+	Market     string
 	Amount   string
 }
 
@@ -291,14 +291,14 @@ type UpdateIsolatedMarginOptions struct {
 // asset to cross or isolated margin.
 type SetMarginModeOptions struct {
 	ObjectID   string
-	Coin       string
+	Market       string
 	MarginMode MarginMode
 }
 
 type PlaceTwapOptions struct {
 	Path            string
 	ExchangeID      string
-	Coin            string
+	Market            string
 	Side            OrderSide
 	TotalSize       string
 	DurationMinutes int

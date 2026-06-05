@@ -205,7 +205,7 @@ type BalanceUpdate struct {
 
 // CandleUpdate is delivered by CandleWatchStream.
 type CandleUpdate struct {
-	Coin     string
+	Market     string
 	Interval CandleInterval
 	Candle   Candle
 }
@@ -498,7 +498,7 @@ func (a *Arca) WatchFills(ctx context.Context, objectID string, opts *ListFillsO
 		}
 		if ev.Fill != nil {
 			s.emit(Fill{
-				ID: ev.Fill.ID, OrderID: ev.Fill.OrderID, Market: ev.Fill.Coin,
+				ID: ev.Fill.ID, OrderID: ev.Fill.OrderID, Market: ev.Fill.Market,
 				Side: ev.Fill.Side, Size: ev.Fill.Size, Price: ev.Fill.Price,
 				Fee: ev.Fill.Fee, IsLiquidation: ev.Fill.IsLiquidation,
 				CreatedAt: ev.Fill.CreatedAt, IsOptimistic: ev.Fill.IsOptimistic,
@@ -558,7 +558,7 @@ func (a *Arca) WatchCandles(ctx context.Context, coins []string, intervals []Can
 	a.ws.acquireCandles(coins, intervals)
 	unsub := a.ws.OnCandleUpdated(func(ev RealmEvent) {
 		if ev.Candle != nil {
-			s.emit(CandleUpdate{Coin: ev.Coin, Interval: ev.Interval, Candle: *ev.Candle})
+			s.emit(CandleUpdate{Market: ev.Market, Interval: ev.Interval, Candle: *ev.Candle})
 		}
 	})
 	s.addUnsub(unsub)

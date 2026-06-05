@@ -343,14 +343,14 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 		}
 		var batch struct {
 			Candles []struct {
-				Coin     string         `json:"coin"`
+				Market     string         `json:"coin"`
 				Interval CandleInterval `json:"interval"`
 				Candle   *Candle        `json:"candle"`
 			} `json:"candles"`
 		}
 		if json.Unmarshal(data, &batch) == nil {
 			for _, it := range batch.Candles {
-				m.dispatch(RealmEvent{Type: EventCandleUpdated, Coin: it.Coin, Interval: it.Interval, Candle: it.Candle})
+				m.dispatch(RealmEvent{Type: EventCandleUpdated, Market: it.Market, Interval: it.Interval, Candle: it.Candle})
 			}
 		}
 		return
@@ -364,7 +364,7 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 		if json.Unmarshal(data, &batch) == nil {
 			for i := range batch.Trades {
 				t := batch.Trades[i]
-				m.dispatch(RealmEvent{Type: EventTradeExecuted, Coin: t.Coin, Trade: &t})
+				m.dispatch(RealmEvent{Type: EventTradeExecuted, Market: t.Market, Trade: &t})
 			}
 		}
 		return

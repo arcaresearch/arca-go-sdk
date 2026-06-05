@@ -32,7 +32,7 @@ func RevalueExchangeState(state ExchangeState, mids map[string]string) ExchangeS
 	var totalUnrealized, totalNotional float64
 	for i := range positions {
 		p := &positions[i]
-		mark, ok := revFloat(mids[p.Coin])
+		mark, ok := revFloat(mids[p.Market])
 		size, sok := revFloat(p.Size)
 		entry, eok := revFloat(p.EntryPrice)
 		if !ok || !sok || !eok || mark <= 0 {
@@ -118,7 +118,7 @@ func RevalueObject(val ObjectValuation, mids map[string]string) ObjectValuation 
 	copy(positions, val.Positions)
 	for i := range positions {
 		p := &positions[i]
-		mark, ok := revFloat(mids[p.Coin])
+		mark, ok := revFloat(mids[p.Market])
 		size, sok := revFloat(p.Size)
 		entry, eok := revFloat(p.EntryPrice)
 		if ok && sok && eok && mark > 0 {

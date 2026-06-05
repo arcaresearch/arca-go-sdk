@@ -86,7 +86,7 @@ func (a *Arca) UpdateLeverage(ctx context.Context, opts UpdateLeverageOptions) (
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/leverage",
-		map[string]any{"coin": opts.Coin, "leverage": opts.Leverage}, &out)
+		map[string]any{"coin": opts.Market, "leverage": opts.Leverage}, &out)
 	return out, err
 }
 
@@ -101,7 +101,7 @@ func (a *Arca) UpdateIsolatedMargin(ctx context.Context, opts UpdateIsolatedMarg
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/isolated-margin",
-		map[string]any{"coin": opts.Coin, "amount": opts.Amount}, &out)
+		map[string]any{"coin": opts.Market, "amount": opts.Amount}, &out)
 	return out, err
 }
 
@@ -116,7 +116,7 @@ func (a *Arca) SetMarginMode(ctx context.Context, opts SetMarginModeOptions) (Se
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/margin-mode",
-		map[string]any{"coin": opts.Coin, "marginMode": opts.MarginMode}, &out)
+		map[string]any{"coin": opts.Market, "marginMode": opts.MarginMode}, &out)
 	return out, err
 }
 
@@ -193,7 +193,7 @@ func (a *Arca) emitOptimisticFill(operation Operation, coin string, side OrderSi
 		Fill: &SimFill{
 			ID:            fmt.Sprintf("fil_opt_%d", msNow()),
 			OrderID:       outcome.OrderID,
-			Coin:          coin,
+			Market:          coin,
 			Side:          side,
 			Price:         fillPrice,
 			Size:          outcome.FilledSize,
@@ -219,7 +219,7 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Coin,
+			"coin":        opts.Market,
 			"side":        opts.Side,
 			"orderType":   opts.OrderType,
 			"size":        opts.Size,
@@ -268,7 +268,7 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		if resp.Operation.State == OpFailed || resp.Operation.State == OpExpired {
 			return resp, newOperationFailedError(resp.Operation.snapshot())
 		}
-		a.emitOptimisticFill(resp.Operation, opts.Coin, opts.Side, opts.Path, opts.Price)
+		a.emitOptimisticFill(resp.Operation, opts.Market, opts.Side, opts.Path, opts.Price)
 		return resp, nil
 	}
 	base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
@@ -334,13 +334,13 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		}
 		var position *SimPosition
 		for i := range positions {
-			if positions[i].Coin == opts.Coin {
+			if positions[i].Market == opts.Market {
 				position = &positions[i]
 				break
 			}
 		}
 		if position == nil {
-			return resp, &NotFoundError{newArcaError("NOT_FOUND", "No open position for "+opts.Coin, "")}
+			return resp, &NotFoundError{newArcaError("NOT_FOUND", "No open position for "+opts.Market, "")}
 		}
 		side := Buy
 		if position.Side == Long {
@@ -363,7 +363,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		isolated := false
 		if opts.Isolated != nil {
 			isolated = *opts.Isolated
-		} else if meta, merr := a.Asset(ctx, opts.Coin); merr == nil && meta != nil {
+		} else if meta, merr := a.Asset(ctx, opts.Market); merr == nil && meta != nil {
 			isolated = meta.OnlyIsolated
 		}
 
@@ -373,7 +373,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Coin,
+			"coin":        opts.Market,
 			"side":        side,
 			"orderType":   "MARKET",
 			"size":        size,
@@ -398,7 +398,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		if resp.Operation.State == OpFailed || resp.Operation.State == OpExpired {
 			return resp, newOperationFailedError(resp.Operation.snapshot())
 		}
-		a.emitOptimisticFill(resp.Operation, opts.Coin, side, opts.Path, "")
+		a.emitOptimisticFill(resp.Operation, opts.Market, side, opts.Path, "")
 		return resp, nil
 	}
 	base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
@@ -446,12 +446,12 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		if opts.TriggerPx == "" {
 			return resp, &ValidationError{newArcaError("VALIDATION_ERROR", "TriggerPx is required", "")}
 		}
-		side, leverage, isolated, err := a.inferPositionCloseParams(ctx, opts.ObjectID, opts.Coin, opts.Leverage, opts.Isolated)
+		side, leverage, isolated, err := a.inferPositionCloseParams(ctx, opts.ObjectID, opts.Market, opts.Leverage, opts.Isolated)
 		if err != nil {
 			return resp, err
 		}
 		if opts.Replace == nil || *opts.Replace {
-			existing, ferr := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Coin, tpsl)
+			existing, ferr := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Market, tpsl)
 			if ferr != nil {
 				return resp, ferr
 			}
@@ -473,7 +473,7 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Coin,
+			"coin":        opts.Market,
 			"side":        side,
 			"orderType":   orderType,
 			"size":        "0",
@@ -528,7 +528,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	}
 	if opts.StopLossPx != "" {
 		sl := a.SetStopLoss(ctx, SetPositionTriggerOptions{
-			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Coin: opts.Coin,
+			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Market: opts.Market,
 			TriggerPx: opts.StopLossPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
 		})
@@ -539,7 +539,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	}
 	if opts.TakeProfitPx != "" {
 		tp := a.SetTakeProfit(ctx, SetPositionTriggerOptions{
-			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Coin: opts.Coin,
+			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Market: opts.Market,
 			TriggerPx: opts.TakeProfitPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
 		})
@@ -555,7 +555,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 // Tpsl ("tp"/"sl") narrows the clear to one leg; empty clears both. Returns the
 // orders that were targeted for cancellation.
 func (a *Arca) ClearPositionTpsl(ctx context.Context, opts ClearPositionTpslOptions) ([]SimOrder, error) {
-	existing, err := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Coin, opts.Tpsl)
+	existing, err := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Market, opts.Tpsl)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +580,7 @@ func (a *Arca) inferPositionCloseParams(ctx context.Context, objectID, coin stri
 	}
 	var position *SimPosition
 	for i := range positions {
-		if positions[i].Coin == coin {
+		if positions[i].Market == coin {
 			position = &positions[i]
 			break
 		}
@@ -618,7 +618,7 @@ func (a *Arca) findPositionTpslOrders(ctx context.Context, objectID, coin, tpsl 
 	}
 	var out []SimOrder
 	for _, o := range orders {
-		if o.Coin == coin && o.Grouping == exGroupingPosTpsl && (tpsl == "" || o.Tpsl == tpsl) {
+		if o.Market == coin && o.Grouping == exGroupingPosTpsl && (tpsl == "" || o.Tpsl == tpsl) {
 			out = append(out, o)
 		}
 	}

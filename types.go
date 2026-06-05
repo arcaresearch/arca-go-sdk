@@ -581,7 +581,6 @@ type BalanceValue struct {
 }
 
 type PositionValue struct {
-	Coin          string  `json:"coin"`
 	Market        string  `json:"market"`
 	Side          string  `json:"side"`
 	Size          string  `json:"size"`

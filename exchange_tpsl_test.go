@@ -54,7 +54,7 @@ func newTpslTestServer(m *tpslMockState) *httptest.Server {
 func tpBoolPtr(b bool) *bool { return &b }
 
 func longBTC() SimPosition {
-	return SimPosition{ID: "pos_1", Coin: "hl:BTC", Side: Long, Size: "0.5", Leverage: 5}
+	return SimPosition{ID: "pos_1", Market: "hl:BTC", Side: Long, Size: "0.5", Leverage: 5}
 }
 
 func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
@@ -64,7 +64,7 @@ func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/1", ObjectID: "obj_1", Coin: "hl:BTC",
+		Path: "/op/sl/1", ObjectID: "obj_1", Market: "hl:BTC",
 		TriggerPx: "55000", Isolated: tpBoolPtr(false),
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
@@ -110,13 +110,13 @@ func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
 }
 
 func TestSetTakeProfit_ShortPlacesBuyPositionTpsl(t *testing.T) {
-	m := &tpslMockState{positions: []SimPosition{{ID: "pos_2", Coin: "hl:ETH", Side: Short, Size: "2", Leverage: 3}}}
+	m := &tpslMockState{positions: []SimPosition{{ID: "pos_2", Market: "hl:ETH", Side: Short, Size: "2", Leverage: 3}}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetTakeProfit(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/tp/1", ObjectID: "obj_1", Coin: "hl:ETH",
+		Path: "/op/tp/1", ObjectID: "obj_1", Market: "hl:ETH",
 		TriggerPx: "2000", Isolated: tpBoolPtr(false),
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
@@ -138,7 +138,7 @@ func TestSetStopLoss_NoPositionReturnsNotFound(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/2", ObjectID: "obj_1", Coin: "hl:BTC", TriggerPx: "55000", Isolated: tpBoolPtr(false),
+		Path: "/op/sl/2", ObjectID: "obj_1", Market: "hl:BTC", TriggerPx: "55000", Isolated: tpBoolPtr(false),
 	})
 	_, err := h.Submitted(context.Background())
 	var nf *NotFoundError
@@ -154,7 +154,7 @@ func TestSetStopLoss_ReplaceCancelsExisting(t *testing.T) {
 	m := &tpslMockState{
 		positions: []SimPosition{longBTC()},
 		openTrigger: []SimOrder{
-			{ID: "ord_old_sl", Coin: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+			{ID: "ord_old_sl", Market: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
 		},
 	}
 	srv := newTpslTestServer(m)
@@ -162,7 +162,7 @@ func TestSetStopLoss_ReplaceCancelsExisting(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/3", ObjectID: "obj_1", Coin: "hl:BTC", TriggerPx: "54000", Isolated: tpBoolPtr(false),
+		Path: "/op/sl/3", ObjectID: "obj_1", Market: "hl:BTC", TriggerPx: "54000", Isolated: tpBoolPtr(false),
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
 		t.Fatalf("SetStopLoss: %v", err)
@@ -179,7 +179,7 @@ func TestSetStopLoss_NoReplaceSkipsCancel(t *testing.T) {
 	m := &tpslMockState{
 		positions: []SimPosition{longBTC()},
 		openTrigger: []SimOrder{
-			{ID: "ord_old_sl", Coin: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+			{ID: "ord_old_sl", Market: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
 		},
 	}
 	srv := newTpslTestServer(m)
@@ -187,7 +187,7 @@ func TestSetStopLoss_NoReplaceSkipsCancel(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/4", ObjectID: "obj_1", Coin: "hl:BTC", TriggerPx: "54000",
+		Path: "/op/sl/4", ObjectID: "obj_1", Market: "hl:BTC", TriggerPx: "54000",
 		Replace: tpBoolPtr(false), Isolated: tpBoolPtr(false),
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
@@ -208,7 +208,7 @@ func TestSetStopLoss_TriggerLimitRequiresLimitPrice(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/5", ObjectID: "obj_1", Coin: "hl:BTC", TriggerPx: "54000",
+		Path: "/op/sl/5", ObjectID: "obj_1", Market: "hl:BTC", TriggerPx: "54000",
 		IsMarket: tpBoolPtr(false), // limit trigger but no LimitPrice
 	})
 	_, err := h.Submitted(context.Background())
@@ -228,7 +228,7 @@ func TestSetStopLoss_TriggerLimitUsesLimitPrice(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/6", ObjectID: "obj_1", Coin: "hl:BTC", TriggerPx: "54000",
+		Path: "/op/sl/6", ObjectID: "obj_1", Market: "hl:BTC", TriggerPx: "54000",
 		IsMarket: tpBoolPtr(false), LimitPrice: "53900", Isolated: tpBoolPtr(false),
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
@@ -248,7 +248,7 @@ func TestSetStopLoss_TriggerLimitUsesLimitPrice(t *testing.T) {
 
 func TestSetStopLoss_InfersIsolatedFromMeta(t *testing.T) {
 	m := &tpslMockState{
-		positions: []SimPosition{{ID: "pos_cl", Coin: "hl:1:CL", Side: Long, Size: "1", Leverage: 2}},
+		positions: []SimPosition{{ID: "pos_cl", Market: "hl:1:CL", Side: Long, Size: "1", Leverage: 2}},
 		meta:      []SimMetaAsset{{Name: "hl:1:CL", OnlyIsolated: true}},
 	}
 	srv := newTpslTestServer(m)
@@ -256,7 +256,7 @@ func TestSetStopLoss_InfersIsolatedFromMeta(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	h := a.SetStopLoss(context.Background(), SetPositionTriggerOptions{
-		Path: "/op/sl/7", ObjectID: "obj_1", Coin: "hl:1:CL", TriggerPx: "60",
+		Path: "/op/sl/7", ObjectID: "obj_1", Market: "hl:1:CL", TriggerPx: "60",
 	})
 	if _, err := h.Submitted(context.Background()); err != nil {
 		t.Fatalf("SetStopLoss: %v", err)
@@ -273,7 +273,7 @@ func TestSetPositionTpsl_PlacesBothLegs(t *testing.T) {
 	a := newTestArca(t, srv.URL)
 
 	res, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
-		Path: "/op/tpsl/1", ObjectID: "obj_1", Coin: "hl:BTC",
+		Path: "/op/tpsl/1", ObjectID: "obj_1", Market: "hl:BTC",
 		StopLossPx: "54000", TakeProfitPx: "70000",
 	})
 	if err != nil {
@@ -296,7 +296,7 @@ func TestSetPositionTpsl_PlacesBothLegs(t *testing.T) {
 func TestSetPositionTpsl_RequiresOnePrice(t *testing.T) {
 	a := newTestArca(t, "http://127.0.0.1:0")
 	_, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
-		Path: "/op/tpsl/2", ObjectID: "obj_1", Coin: "hl:BTC",
+		Path: "/op/tpsl/2", ObjectID: "obj_1", Market: "hl:BTC",
 	})
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
@@ -306,17 +306,17 @@ func TestSetPositionTpsl_RequiresOnePrice(t *testing.T) {
 
 func TestClearPositionTpsl_CancelsBothLegs(t *testing.T) {
 	m := &tpslMockState{openTrigger: []SimOrder{
-		{ID: "ord_sl", Coin: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_tp", Coin: "hl:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_other", Coin: "hl:BTC", Tpsl: "sl", Grouping: "normalTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_eth", Coin: "hl:ETH", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_sl", Market: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_tp", Market: "hl:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_other", Market: "hl:BTC", Tpsl: "sl", Grouping: "normalTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_eth", Market: "hl:ETH", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
 	}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
 	a := newTestArca(t, srv.URL)
 
 	cleared, err := a.ClearPositionTpsl(context.Background(), ClearPositionTpslOptions{
-		Path: "/op/clear/1", ObjectID: "obj_1", Coin: "hl:BTC",
+		Path: "/op/clear/1", ObjectID: "obj_1", Market: "hl:BTC",
 	})
 	if err != nil {
 		t.Fatalf("ClearPositionTpsl: %v", err)
@@ -331,15 +331,15 @@ func TestClearPositionTpsl_CancelsBothLegs(t *testing.T) {
 
 func TestClearPositionTpsl_FilterByLeg(t *testing.T) {
 	m := &tpslMockState{openTrigger: []SimOrder{
-		{ID: "ord_sl", Coin: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_tp", Coin: "hl:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_sl", Market: "hl:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_tp", Market: "hl:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
 	}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
 	a := newTestArca(t, srv.URL)
 
 	cleared, err := a.ClearPositionTpsl(context.Background(), ClearPositionTpslOptions{
-		Path: "/op/clear/2", ObjectID: "obj_1", Coin: "hl:BTC", Tpsl: "sl",
+		Path: "/op/clear/2", ObjectID: "obj_1", Market: "hl:BTC", Tpsl: "sl",
 	})
 	if err != nil {
 		t.Fatalf("ClearPositionTpsl: %v", err)

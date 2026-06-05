@@ -158,7 +158,7 @@ func (a *Arca) GetCandles(ctx context.Context, coin string, interval CandleInter
 		if err != nil {
 			return out, err
 		}
-		out = CandlesResponse{Coin: coin, Interval: string(interval), Candles: candles}
+		out = CandlesResponse{Market: coin, Interval: string(interval), Candles: candles}
 		a.cache.set(key, out)
 		return out, nil
 	}

@@ -465,14 +465,14 @@ func TestUpdateIsolatedMargin_PostsToEndpoint(t *testing.T) {
 		gotPath = r.URL.Path
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		writeEnvelope(w, 200, UpdateIsolatedMarginResponse{
-			AccountID: "act_1", Coin: "hl:1:CL", IsolatedMargin: "125", LiquidationPrice: "50",
+			AccountID: "act_1", Market: "hl:1:CL", IsolatedMargin: "125", LiquidationPrice: "50",
 		})
 	}))
 	defer srv.Close()
 
 	a := newTestArca(t, srv.URL)
 	resp, err := a.UpdateIsolatedMargin(context.Background(), UpdateIsolatedMarginOptions{
-		ObjectID: "obj_1", Coin: "hl:1:CL", Amount: "25",
+		ObjectID: "obj_1", Market: "hl:1:CL", Amount: "25",
 	})
 	if err != nil {
 		t.Fatalf("UpdateIsolatedMargin: %v", err)
@@ -498,13 +498,13 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		writeEnvelope(w, 200, SetMarginModeResponse{AccountID: "act_1", Coin: "hl:BTC", MarginMode: MarginModeIsolated})
+		writeEnvelope(w, 200, SetMarginModeResponse{AccountID: "act_1", Market: "hl:BTC", MarginMode: MarginModeIsolated})
 	}))
 	defer srv.Close()
 
 	a := newTestArca(t, srv.URL)
 	resp, err := a.SetMarginMode(context.Background(), SetMarginModeOptions{
-		ObjectID: "obj_1", Coin: "hl:BTC", MarginMode: MarginModeIsolated,
+		ObjectID: "obj_1", Market: "hl:BTC", MarginMode: MarginModeIsolated,
 	})
 	if err != nil {
 		t.Fatalf("SetMarginMode: %v", err)
@@ -521,7 +521,7 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 	if gotBody["marginMode"] != "isolated" {
 		t.Errorf("body marginMode = %v", gotBody["marginMode"])
 	}
-	if resp.MarginMode != MarginModeIsolated || resp.Coin != "hl:BTC" {
+	if resp.MarginMode != MarginModeIsolated || resp.Market != "hl:BTC" {
 		t.Errorf("resp = %+v", resp)
 	}
 }
