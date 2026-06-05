@@ -11,7 +11,7 @@ func (a *Arca) PlaceTwap(ctx context.Context, opts PlaceTwapOptions) *OperationH
 		body := map[string]any{
 			"realmId":         a.currentRealmID(),
 			"path":            opts.Path,
-			"coin":            opts.Market,
+			"market":          opts.Market,
 			"side":            opts.Side,
 			"totalSize":       opts.TotalSize,
 			"durationMinutes": opts.DurationMinutes,

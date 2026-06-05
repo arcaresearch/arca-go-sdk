@@ -343,7 +343,7 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 		}
 		var batch struct {
 			Candles []struct {
-				Market     string         `json:"coin"`
+				Market   string         `json:"market"`
 				Interval CandleInterval `json:"interval"`
 				Candle   *Candle        `json:"candle"`
 			} `json:"candles"`

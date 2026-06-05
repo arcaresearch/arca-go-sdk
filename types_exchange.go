@@ -82,7 +82,7 @@ type SimPosition struct {
 	ID         string       `json:"id"`
 	AccountID  string       `json:"accountId"`
 	RealmID    string       `json:"realmId"`
-	Market       string       `json:"coin"`
+	Market     string       `json:"market"`
 	Side       PositionSide `json:"side"`
 	Size       string       `json:"size"`
 	EntryPrice string       `json:"entryPrice"`
@@ -119,7 +119,7 @@ type SimOrder struct {
 	ID           string      `json:"id"`
 	AccountID    string      `json:"accountId"`
 	RealmID      string      `json:"realmId"`
-	Market         string      `json:"coin"`
+	Market       string      `json:"market"`
 	Side         OrderSide   `json:"side"`
 	OrderType    string      `json:"orderType"`
 	Price        *string     `json:"price"`
@@ -153,7 +153,7 @@ type SimFill struct {
 	OrderID       string    `json:"orderId"`
 	AccountID     string    `json:"accountId,omitempty"`
 	RealmID       string    `json:"realmId,omitempty"`
-	Market          string    `json:"coin"`
+	Market        string    `json:"market"`
 	Side          OrderSide `json:"side"`
 	Price         string    `json:"price"`
 	Size          string    `json:"size"`
@@ -175,7 +175,7 @@ type SimOrderWithFills struct {
 
 type FundingPayment struct {
 	AccountID   string `json:"accountId"`
-	Market        string `json:"coin"`
+	Market      string `json:"market"`
 	Side        string `json:"side"`
 	Size        string `json:"size"`
 	Price       string `json:"price"`
@@ -280,7 +280,7 @@ type SimFeeRates struct {
 type ExchangeIntent struct {
 	OperationID   string    `json:"operationId"`
 	OperationPath string    `json:"operationPath"`
-	Market          string    `json:"coin"`
+	Market        string    `json:"market"`
 	Side          OrderSide `json:"side"`
 	Size          string    `json:"size"`
 	OrderType     string    `json:"orderType"`
@@ -300,7 +300,7 @@ type ExchangeState struct {
 }
 
 type AssetFeeEntry struct {
-	Market         string `json:"coin"`
+	Market       string `json:"market"`
 	TakerFeeRate string `json:"takerFeeRate"`
 	MakerFeeRate string `json:"makerFeeRate"`
 }
@@ -321,7 +321,7 @@ type MarginTable struct {
 }
 
 type ActiveAssetData struct {
-	Market                  string       `json:"coin"`
+	Market                string       `json:"market"`
 	Leverage              LeverageInfo `json:"leverage"`
 	MaxBuySize            string       `json:"maxBuySize"`
 	MaxSellSize           string       `json:"maxSellSize"`
@@ -342,13 +342,13 @@ type ActiveAssetData struct {
 
 type UpdateLeverageResponse struct {
 	AccountID        string `json:"accountId"`
-	Market             string `json:"coin"`
+	Market           string `json:"market"`
 	Leverage         int    `json:"leverage"`
 	PreviousLeverage int    `json:"previousLeverage"`
 }
 
 type LeverageSetting struct {
-	Market       string     `json:"coin"`
+	Market     string     `json:"market"`
 	Leverage   int        `json:"leverage"`
 	MarginMode MarginMode `json:"marginMode"`
 }
@@ -357,7 +357,7 @@ type LeverageSetting struct {
 // resulting locked isolated collateral and recomputed liquidation price.
 type UpdateIsolatedMarginResponse struct {
 	AccountID        string `json:"accountId"`
-	Market             string `json:"coin"`
+	Market           string `json:"market"`
 	IsolatedMargin   string `json:"isolatedMargin"`
 	LiquidationPrice string `json:"liquidationPrice"`
 }
@@ -366,7 +366,7 @@ type UpdateIsolatedMarginResponse struct {
 // margin mode.
 type SetMarginModeResponse struct {
 	AccountID  string     `json:"accountId"`
-	Market       string     `json:"coin"`
+	Market     string     `json:"market"`
 	MarginMode MarginMode `json:"marginMode"`
 }
 
@@ -389,7 +389,7 @@ type Twap struct {
 	ExchangeObjectPath  string     `json:"exchangeObjectPath"`
 	SimAccountID        string     `json:"simAccountId"`
 	Type                string     `json:"type"`
-	Market                string     `json:"coin"`
+	Market              string     `json:"market"`
 	Side                OrderSide  `json:"side"`
 	TotalSize           *string    `json:"totalSize"`
 	ExecutedSize        string     `json:"executedSize"`
@@ -523,7 +523,7 @@ type SimMidsResponse struct {
 }
 
 type MarketTicker struct {
-	Market              string  `json:"coin"`
+	Market            string  `json:"market"`
 	Dex               string  `json:"dex,omitempty"`
 	Symbol            string  `json:"symbol"`
 	Exchange          string  `json:"exchange"`
@@ -550,10 +550,10 @@ type SimBookLevel struct {
 }
 
 type SimBookResponse struct {
-	Market string         `json:"coin"`
-	Bids []SimBookLevel `json:"bids"`
-	Asks []SimBookLevel `json:"asks"`
-	Time int64          `json:"time"`
+	Market string         `json:"market"`
+	Bids   []SimBookLevel `json:"bids"`
+	Asks   []SimBookLevel `json:"asks"`
+	Time   int64          `json:"time"`
 }
 
 type Candle struct {
@@ -568,18 +568,18 @@ type Candle struct {
 }
 
 type CandlesResponse struct {
-	Market     string   `json:"coin"`
+	Market   string   `json:"market"`
 	Interval string   `json:"interval"`
 	Candles  []Candle `json:"candles"`
 }
 
 type MarketTrade struct {
-	Market string `json:"coin"`
-	Px   string `json:"px"`
-	Sz   string `json:"sz"`
-	Side string `json:"side"`
-	Time string `json:"time"`
-	Hash string `json:"hash,omitempty"`
+	Market string `json:"market"`
+	Px     string `json:"px"`
+	Sz     string `json:"sz"`
+	Side   string `json:"side"`
+	Time   string `json:"time"`
+	Hash   string `json:"hash,omitempty"`
 }
 
 type SparklinesResponse struct {
@@ -594,7 +594,7 @@ type PredictedBalanceChange struct {
 }
 
 type PredictedOrderIntent struct {
-	Market       string `json:"coin"`
+	Market     string `json:"market"`
 	Side       string `json:"side"`
 	Size       string `json:"size"`
 	ReduceOnly bool   `json:"reduceOnly"`

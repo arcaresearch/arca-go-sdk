@@ -52,7 +52,7 @@ func (a *Arca) GetActiveAssetData(ctx context.Context, objectID, coin string, ap
 	if err := a.ensureReady(ctx); err != nil {
 		return out, err
 	}
-	params := url.Values{"coin": {coin}}
+	params := url.Values{"market": {coin}}
 	if applicationFeeTenthsBps > 0 {
 		params.Set("applicationFeeTenthsBps", strconv.Itoa(applicationFeeTenthsBps))
 	}
@@ -86,7 +86,7 @@ func (a *Arca) UpdateLeverage(ctx context.Context, opts UpdateLeverageOptions) (
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/leverage",
-		map[string]any{"coin": opts.Market, "leverage": opts.Leverage}, &out)
+		map[string]any{"market": opts.Market, "leverage": opts.Leverage}, &out)
 	return out, err
 }
 
@@ -101,7 +101,7 @@ func (a *Arca) UpdateIsolatedMargin(ctx context.Context, opts UpdateIsolatedMarg
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/isolated-margin",
-		map[string]any{"coin": opts.Market, "amount": opts.Amount}, &out)
+		map[string]any{"market": opts.Market, "amount": opts.Amount}, &out)
 	return out, err
 }
 
@@ -116,7 +116,7 @@ func (a *Arca) SetMarginMode(ctx context.Context, opts SetMarginModeOptions) (Se
 		return out, err
 	}
 	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/margin-mode",
-		map[string]any{"coin": opts.Market, "marginMode": opts.MarginMode}, &out)
+		map[string]any{"market": opts.Market, "marginMode": opts.MarginMode}, &out)
 	return out, err
 }
 
@@ -138,7 +138,7 @@ func (a *Arca) GetLeverage(ctx context.Context, objectID, coin string) (Leverage
 	if err := a.ensureReady(ctx); err != nil {
 		return out, err
 	}
-	err := a.client.get(ctx, "/objects/"+objectID+"/exchange/leverage", url.Values{"coin": {coin}}, &out)
+	err := a.client.get(ctx, "/objects/"+objectID+"/exchange/leverage", url.Values{"market": {coin}}, &out)
 	return out, err
 }
 
@@ -193,7 +193,7 @@ func (a *Arca) emitOptimisticFill(operation Operation, coin string, side OrderSi
 		Fill: &SimFill{
 			ID:            fmt.Sprintf("fil_opt_%d", msNow()),
 			OrderID:       outcome.OrderID,
-			Market:          coin,
+			Market:        coin,
 			Side:          side,
 			Price:         fillPrice,
 			Size:          outcome.FilledSize,
@@ -219,7 +219,7 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Market,
+			"market":      opts.Market,
 			"side":        opts.Side,
 			"orderType":   opts.OrderType,
 			"size":        opts.Size,
@@ -373,7 +373,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Market,
+			"market":      opts.Market,
 			"side":        side,
 			"orderType":   "MARKET",
 			"size":        size,
@@ -473,7 +473,7 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
-			"coin":        opts.Market,
+			"market":      opts.Market,
 			"side":        side,
 			"orderType":   orderType,
 			"size":        "0",

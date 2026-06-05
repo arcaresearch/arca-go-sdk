@@ -86,7 +86,7 @@ type RealmEvent struct {
 	Funding *FundingPayment `json:"funding,omitempty"`
 	Realm   *Realm          `json:"realm,omitempty"`
 
-	Market     string         `json:"coin,omitempty"`
+	Market   string         `json:"market,omitempty"`
 	Interval CandleInterval `json:"interval,omitempty"`
 	Candle   *Candle        `json:"candle,omitempty"`
 	Trade    *MarketTrade   `json:"trade,omitempty"`
