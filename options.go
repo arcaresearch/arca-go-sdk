@@ -173,19 +173,17 @@ type PlaceOrderOptions struct {
 	ReduceOnly  bool
 	Isolated    bool
 	TimeInForce string // "GTC" | "IOC" | "ALO"
-	// ApplicationFeeBps is the application's fee on this order in tenths of a
-	// basis point.
-	ApplicationFeeBps *int
-	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
-	BuilderFeeBps *int
-	FeeTargets    []FeeTarget
-	IsTrigger     bool
-	TriggerPx     string
-	IsMarket      *bool
-	Tpsl          string // "tp" | "sl"
-	Grouping      string // "na" | "normalTpsl" | "positionTpsl"
-	UseMax        bool
-	SizeTolerance *float64
+	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
+	// of a basis point.
+	ApplicationFeeTenthsBps *int
+	FeeTargets              []FeeTarget
+	IsTrigger               bool
+	TriggerPx               string
+	IsMarket                *bool
+	Tpsl                    string // "tp" | "sl"
+	Grouping                string // "na" | "normalTpsl" | "positionTpsl"
+	UseMax                  bool
+	SizeTolerance           *float64
 }
 
 type ClosePositionOptions struct {
@@ -194,14 +192,12 @@ type ClosePositionOptions struct {
 	Coin        string
 	Size        string
 	TimeInForce string
-	// ApplicationFeeBps is the application's fee on this order in tenths of a
-	// basis point.
-	ApplicationFeeBps *int
-	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
-	BuilderFeeBps *int
-	FeeTargets    []FeeTarget
-	Isolated      *bool
-	Leverage      *int
+	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
+	// of a basis point.
+	ApplicationFeeTenthsBps *int
+	FeeTargets              []FeeTarget
+	Isolated                *bool
+	Leverage                *int
 }
 
 // SetPositionTriggerOptions parameterizes SetStopLoss / SetTakeProfit. The
@@ -231,12 +227,10 @@ type SetPositionTriggerOptions struct {
 	Isolated *bool
 	// TimeInForce defaults to GTC.
 	TimeInForce string
-	// ApplicationFeeBps is the application's fee on this order in tenths of a
-	// basis point.
-	ApplicationFeeBps *int
-	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
-	BuilderFeeBps *int
-	FeeTargets    []FeeTarget
+	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
+	// of a basis point.
+	ApplicationFeeTenthsBps *int
+	FeeTargets              []FeeTarget
 }
 
 // SetPositionTpslOptions parameterizes SetPositionTpsl, which attaches a
@@ -250,12 +244,10 @@ type SetPositionTpslOptions struct {
 	TakeProfitPx string
 	IsMarket     *bool
 	Replace      *bool
-	// ApplicationFeeBps is the application's fee on this order in tenths of a
-	// basis point.
-	ApplicationFeeBps *int
-	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
-	BuilderFeeBps *int
-	FeeTargets    []FeeTarget
+	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
+	// of a basis point.
+	ApplicationFeeTenthsBps *int
+	FeeTargets              []FeeTarget
 }
 
 // SetPositionTpslResult holds the handles for the legs placed by

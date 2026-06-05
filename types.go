@@ -44,12 +44,9 @@ const (
 )
 
 type RealmSettings struct {
-	// DefaultApplicationFeeBps is the realm's default application fee in tenths
-	// of a basis point.
-	DefaultApplicationFeeBps *int `json:"defaultApplicationFeeBps,omitempty"`
-	// Deprecated: use DefaultApplicationFeeBps. Kept as a read alias for one
-	// release; responses still echo this field.
-	DefaultBuilderFeeBps *int `json:"defaultBuilderFeeBps,omitempty"`
+	// DefaultApplicationFeeTenthsBps is the realm's default application fee in
+	// tenths of a basis point (so 40 == 4 bps).
+	DefaultApplicationFeeTenthsBps *int `json:"defaultApplicationFeeTenthsBps,omitempty"`
 }
 
 type Realm struct {

@@ -131,7 +131,7 @@ type SimOrder struct {
 	TimeInForce  string      `json:"timeInForce"`
 	Leverage     int         `json:"leverage"`
 	// BuilderFeeBps echoes the venue's builder-code fee on the order (the
-	// value configured via the order's applicationFeeBps).
+	// value configured via the order's applicationFeeTenthsBps).
 	BuilderFeeBps *int    `json:"builderFeeBps,omitempty"`
 	IsTrigger     bool    `json:"isTrigger,omitempty"`
 	TriggerPx     *string `json:"triggerPx,omitempty"`

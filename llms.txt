@@ -82,8 +82,8 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Close position | client.ClosePosition(ctx, ClosePositionOptions{...}) |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
 | Exchange state | client.GetExchangeState(ctx, id) |
-| Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeBps, leverage) |
-| Asset fees | client.GetAssetFees(ctx, id, applicationFeeBps) |
+| Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage) |
+| Asset fees | client.GetAssetFees(ctx, id, applicationFeeTenthsBps) |
 | Set leverage | client.UpdateLeverage(ctx, UpdateLeverageOptions{...}) |
 | Add/remove isolated margin | client.UpdateIsolatedMargin(ctx, UpdateIsolatedMarginOptions{...}) |
 | Set margin mode (cross/iso) | client.SetMarginMode(ctx, SetMarginModeOptions{...}) |
