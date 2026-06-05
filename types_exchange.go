@@ -116,29 +116,31 @@ type PositionListResponse struct {
 }
 
 type SimOrder struct {
-	ID            string      `json:"id"`
-	AccountID     string      `json:"accountId"`
-	RealmID       string      `json:"realmId"`
-	Coin          string      `json:"coin"`
-	Side          OrderSide   `json:"side"`
-	OrderType     string      `json:"orderType"`
-	Price         *string     `json:"price"`
-	Size          string      `json:"size"`
-	FilledSize    string      `json:"filledSize"`
-	AvgFillPrice  *string     `json:"avgFillPrice"`
-	Status        OrderStatus `json:"status"`
-	ReduceOnly    bool        `json:"reduceOnly"`
-	TimeInForce   string      `json:"timeInForce"`
-	Leverage      int         `json:"leverage"`
-	BuilderFeeBps *int        `json:"builderFeeBps,omitempty"`
-	IsTrigger     bool        `json:"isTrigger,omitempty"`
-	TriggerPx     *string     `json:"triggerPx,omitempty"`
-	IsMarket      bool        `json:"isMarket,omitempty"`
-	Tpsl          string      `json:"tpsl,omitempty"`
-	Grouping      string      `json:"grouping,omitempty"`
-	ParentOrderID string      `json:"parentOrderId,omitempty"`
-	CreatedAt     string      `json:"createdAt"`
-	UpdatedAt     string      `json:"updatedAt"`
+	ID           string      `json:"id"`
+	AccountID    string      `json:"accountId"`
+	RealmID      string      `json:"realmId"`
+	Coin         string      `json:"coin"`
+	Side         OrderSide   `json:"side"`
+	OrderType    string      `json:"orderType"`
+	Price        *string     `json:"price"`
+	Size         string      `json:"size"`
+	FilledSize   string      `json:"filledSize"`
+	AvgFillPrice *string     `json:"avgFillPrice"`
+	Status       OrderStatus `json:"status"`
+	ReduceOnly   bool        `json:"reduceOnly"`
+	TimeInForce  string      `json:"timeInForce"`
+	Leverage     int         `json:"leverage"`
+	// BuilderFeeBps echoes the venue's builder-code fee on the order (the
+	// value configured via the order's applicationFeeBps).
+	BuilderFeeBps *int    `json:"builderFeeBps,omitempty"`
+	IsTrigger     bool    `json:"isTrigger,omitempty"`
+	TriggerPx     *string `json:"triggerPx,omitempty"`
+	IsMarket      bool    `json:"isMarket,omitempty"`
+	Tpsl          string  `json:"tpsl,omitempty"`
+	Grouping      string  `json:"grouping,omitempty"`
+	ParentOrderID string  `json:"parentOrderId,omitempty"`
+	CreatedAt     string  `json:"createdAt"`
+	UpdatedAt     string  `json:"updatedAt"`
 }
 
 type OrderListResponse struct {
@@ -477,25 +479,25 @@ type LogoSource struct {
 }
 
 type SimMetaAsset struct {
-	Name                string               `json:"name"`
-	Dex                 string               `json:"dex,omitempty"`
-	Symbol              string               `json:"symbol"`
-	VenueSymbol         string               `json:"venueSymbol,omitempty"`
-	DisplayName         string               `json:"displayName,omitempty"`
-	LogoURL             string               `json:"logoUrl,omitempty"`
-	LogoSources         []LogoSource         `json:"logoSources,omitempty"`
-	Exchange            string               `json:"exchange"`
-	AssetType           string               `json:"assetType,omitempty"`
-	CategoryLabel       string               `json:"categoryLabel,omitempty"`
-	Mapped              bool                 `json:"mapped"`
-	HasDisplayName      bool                 `json:"hasDisplayName"`
-	HasLogo             bool                 `json:"hasLogo"`
-	DescriptionStatus   string               `json:"descriptionStatus,omitempty"`
-	IsHip3              bool                 `json:"isHip3,omitempty"`
-	DeployerDisplayName string               `json:"deployerDisplayName,omitempty"`
-	Index               int                  `json:"index"`
-	SzDecimals          int                  `json:"szDecimals"`
-	MaxLeverage         int                  `json:"maxLeverage"`
+	Name                string       `json:"name"`
+	Dex                 string       `json:"dex,omitempty"`
+	Symbol              string       `json:"symbol"`
+	VenueSymbol         string       `json:"venueSymbol,omitempty"`
+	DisplayName         string       `json:"displayName,omitempty"`
+	LogoURL             string       `json:"logoUrl,omitempty"`
+	LogoSources         []LogoSource `json:"logoSources,omitempty"`
+	Exchange            string       `json:"exchange"`
+	AssetType           string       `json:"assetType,omitempty"`
+	CategoryLabel       string       `json:"categoryLabel,omitempty"`
+	Mapped              bool         `json:"mapped"`
+	HasDisplayName      bool         `json:"hasDisplayName"`
+	HasLogo             bool         `json:"hasLogo"`
+	DescriptionStatus   string       `json:"descriptionStatus,omitempty"`
+	IsHip3              bool         `json:"isHip3,omitempty"`
+	DeployerDisplayName string       `json:"deployerDisplayName,omitempty"`
+	Index               int          `json:"index"`
+	SzDecimals          int          `json:"szDecimals"`
+	MaxLeverage         int          `json:"maxLeverage"`
 	// OnlyIsolated is Hyperliquid-specific and deprecated in favor of
 	// MarginModes. OnlyIsolated==true is equivalent to MarginModes
 	// being ["isolated"]. Independent of HIP-3 — some HIP-3 markets
@@ -505,10 +507,10 @@ type SimMetaAsset struct {
 	// the asset supports: ["isolated"] for isolated-only markets,
 	// ["cross","isolated"] otherwise. Read this instead of inferring from
 	// OnlyIsolated or IsHip3. May be nil when served by an older backend.
-	MarginModes         []string             `json:"marginModes,omitempty"`
-	FeeScale            float64              `json:"feeScale,omitempty"`
-	MarginTableID       int                  `json:"marginTableId,omitempty"`
-	CandleHistory       *CandleHistoryBounds `json:"candleHistory,omitempty"`
+	MarginModes   []string             `json:"marginModes,omitempty"`
+	FeeScale      float64              `json:"feeScale,omitempty"`
+	MarginTableID int                  `json:"marginTableId,omitempty"`
+	CandleHistory *CandleHistoryBounds `json:"candleHistory,omitempty"`
 }
 
 type SimMetaResponse struct {

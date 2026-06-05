@@ -11,12 +11,15 @@ import (
 
 // EnsurePerpsExchange creates (or returns) a perpetuals exchange Arca object.
 // The default settlement wait is 60s (exchange creation is slower than transfers).
+//
+// Venue decides routing: "hl-sim" (default) provisions a simulated
+// Hyperliquid account; "hl" provisions a live one.
 func (a *Arca) EnsurePerpsExchange(ctx context.Context, opts CreatePerpsExchangeOptions) *OperationHandle[EnsureArcaObjectResponse] {
-	exType := opts.ExchangeType
-	if exType == "" {
-		exType = "hyperliquid"
+	venue := opts.Venue
+	if venue == "" {
+		venue = "hl-sim"
 	}
-	meta, _ := json.Marshal(map[string]string{"exchangeType": exType})
+	meta, _ := json.Marshal(map[string]string{"venue": venue})
 	return op(a, ctx, func() (EnsureArcaObjectResponse, error) {
 		var resp EnsureArcaObjectResponse
 		err := a.client.post(ctx, "/objects", map[string]any{
@@ -41,16 +44,26 @@ func (a *Arca) GetExchangeState(ctx context.Context, objectID string) (ExchangeS
 	return out, err
 }
 
+// resolveApplicationFeeBps returns the application fee, preferring the canonical
+// ApplicationFeeBps and falling back to the deprecated BuilderFeeBps alias.
+func resolveApplicationFeeBps(application, builder *int) *int {
+	if application != nil {
+		return application
+	}
+	return builder
+}
+
 // GetActiveAssetData returns max trade sizes, available margin, mark price, and
-// fee rate for a coin on an exchange object.
-func (a *Arca) GetActiveAssetData(ctx context.Context, objectID, coin string, builderFeeBps, leverage int) (ActiveAssetData, error) {
+// fee rate for a coin on an exchange object. applicationFeeBps is the
+// application's fee in tenths of a basis point.
+func (a *Arca) GetActiveAssetData(ctx context.Context, objectID, coin string, applicationFeeBps, leverage int) (ActiveAssetData, error) {
 	var out ActiveAssetData
 	if err := a.ensureReady(ctx); err != nil {
 		return out, err
 	}
 	params := url.Values{"coin": {coin}}
-	if builderFeeBps > 0 {
-		params.Set("builderFeeBps", strconv.Itoa(builderFeeBps))
+	if applicationFeeBps > 0 {
+		params.Set("applicationFeeBps", strconv.Itoa(applicationFeeBps))
 	}
 	if leverage > 0 {
 		params.Set("leverage", strconv.Itoa(leverage))
@@ -60,14 +73,15 @@ func (a *Arca) GetActiveAssetData(ctx context.Context, objectID, coin string, bu
 }
 
 // GetAssetFees returns effective taker/maker fee rates for every tradeable
-// asset on an exchange account.
-func (a *Arca) GetAssetFees(ctx context.Context, objectID string, builderFeeBps int) ([]AssetFeeEntry, error) {
+// asset on an exchange account. applicationFeeBps is the application's fee in
+// tenths of a basis point.
+func (a *Arca) GetAssetFees(ctx context.Context, objectID string, applicationFeeBps int) ([]AssetFeeEntry, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return nil, err
 	}
 	params := url.Values{}
-	if builderFeeBps > 0 {
-		params.Set("builderFeeBps", strconv.Itoa(builderFeeBps))
+	if applicationFeeBps > 0 {
+		params.Set("applicationFeeBps", strconv.Itoa(applicationFeeBps))
 	}
 	var out []AssetFeeEntry
 	err := a.client.get(ctx, "/objects/"+objectID+"/exchange/asset-fees", params, &out)
@@ -144,7 +158,7 @@ func (a *Arca) orderHandleDeps() orderHandleDeps {
 		},
 		onFillEvent: func(handler func(RealmEvent)) func() {
 			a.ws.EnsureConnected()
-			return a.ws.On(EventExchangeFill, handler)
+			return a.ws.On(EventFillPreviewed, handler)
 		},
 		cancelOrder: func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse] {
 			return a.CancelOrder(ctx, opts)
@@ -182,7 +196,7 @@ func (a *Arca) emitOptimisticFill(operation Operation, coin string, side OrderSi
 		fillPrice = "0"
 	}
 	a.ws.EmitLocal(RealmEvent{
-		Type:       EventExchangeFill,
+		Type:       EventFillPreviewed,
 		RealmID:    a.currentRealmID(),
 		EntityPath: path,
 		Fill: &SimFill{
@@ -227,8 +241,8 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		if opts.Leverage != nil {
 			body["leverage"] = *opts.Leverage
 		}
-		if opts.BuilderFeeBps != nil {
-			body["builderFeeBps"] = *opts.BuilderFeeBps
+		if fee := resolveApplicationFeeBps(opts.ApplicationFeeBps, opts.BuilderFeeBps); fee != nil {
+			body["applicationFeeBps"] = *fee
 		}
 		if opts.FeeTargets != nil {
 			body["feeTargets"] = opts.FeeTargets
@@ -381,8 +395,8 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		if isolated {
 			body["isolated"] = true
 		}
-		if opts.BuilderFeeBps != nil {
-			body["builderFeeBps"] = *opts.BuilderFeeBps
+		if fee := resolveApplicationFeeBps(opts.ApplicationFeeBps, opts.BuilderFeeBps); fee != nil {
+			body["applicationFeeBps"] = *fee
 		}
 		if opts.FeeTargets != nil {
 			body["feeTargets"] = opts.FeeTargets
@@ -489,8 +503,8 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		if isolated {
 			body["isolated"] = true
 		}
-		if opts.BuilderFeeBps != nil {
-			body["builderFeeBps"] = *opts.BuilderFeeBps
+		if fee := resolveApplicationFeeBps(opts.ApplicationFeeBps, opts.BuilderFeeBps); fee != nil {
+			body["applicationFeeBps"] = *fee
 		}
 		if opts.FeeTargets != nil {
 			body["feeTargets"] = opts.FeeTargets
@@ -525,7 +539,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 		sl := a.SetStopLoss(ctx, SetPositionTriggerOptions{
 			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Coin: opts.Coin,
 			TriggerPx: opts.StopLossPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
-			BuilderFeeBps: opts.BuilderFeeBps, FeeTargets: opts.FeeTargets,
+			ApplicationFeeBps: resolveApplicationFeeBps(opts.ApplicationFeeBps, opts.BuilderFeeBps), FeeTargets: opts.FeeTargets,
 		})
 		if _, err := sl.Submitted(ctx); err != nil {
 			return result, err
@@ -536,7 +550,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 		tp := a.SetTakeProfit(ctx, SetPositionTriggerOptions{
 			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Coin: opts.Coin,
 			TriggerPx: opts.TakeProfitPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
-			BuilderFeeBps: opts.BuilderFeeBps, FeeTargets: opts.FeeTargets,
+			ApplicationFeeBps: resolveApplicationFeeBps(opts.ApplicationFeeBps, opts.BuilderFeeBps), FeeTargets: opts.FeeTargets,
 		})
 		if _, err := tp.Submitted(ctx); err != nil {
 			return result, err

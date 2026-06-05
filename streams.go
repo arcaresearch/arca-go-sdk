@@ -505,7 +505,7 @@ func (a *Arca) WatchFills(ctx context.Context, objectID string, opts *ListFillsO
 			})
 		}
 	}
-	u1 := a.ws.OnExchangeFill(func(_ *SimFill, ev RealmEvent) { emitFromEvent(ev) })
+	u1 := a.ws.OnFillPreviewed(func(_ *SimFill, ev RealmEvent) { emitFromEvent(ev) })
 	u2 := a.ws.OnFillRecorded(func(ev RealmEvent) { emitFromEvent(ev) })
 	s.addUnsub(u1)
 	s.addUnsub(u2)

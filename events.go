@@ -4,15 +4,22 @@ package arca
 type EventType = string
 
 const (
-	EventOperationCreated     EventType = "operation.created"
-	EventOperationUpdated     EventType = "operation.updated"
-	EventEventCreated         EventType = "event.created"
-	EventObjectCreated        EventType = "object.created"
-	EventObjectUpdated        EventType = "object.updated"
-	EventObjectDeleted        EventType = "object.deleted"
-	EventBalanceUpdated       EventType = "balance.updated"
-	EventExchangeUpdated      EventType = "exchange.updated"
-	EventExchangeFill         EventType = "exchange.fill"
+	EventOperationCreated EventType = "operation.created"
+	EventOperationUpdated EventType = "operation.updated"
+	EventEventCreated     EventType = "event.created"
+	EventObjectCreated    EventType = "object.created"
+	EventObjectUpdated    EventType = "object.updated"
+	EventObjectDeleted    EventType = "object.deleted"
+	EventBalanceUpdated   EventType = "balance.updated"
+	EventExchangeUpdated  EventType = "exchange.updated"
+	// EventFillPreviewed is Phase 1 of two-phase fill delivery: the instant,
+	// incomplete venue-level fill echo. EventFillRecorded (Phase 2) follows with
+	// the authoritative record; the SDK merges the pair by correlationId.
+	EventFillPreviewed EventType = "fill.previewed"
+	// Deprecated: renamed to EventFillPreviewed. The wire value changed from
+	// "exchange.fill" to "fill.previewed" pre-launch; this alias resolves to the
+	// new value and will be removed in a future release.
+	EventExchangeFill         EventType = "fill.previewed"
 	EventFillRecorded         EventType = "fill.recorded"
 	EventExchangeFunding      EventType = "exchange.funding"
 	EventAggregationUpdated   EventType = "aggregation.updated"

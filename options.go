@@ -149,23 +149,34 @@ type ListEventsOptions struct {
 // ---- Exchange ----
 
 type CreatePerpsExchangeOptions struct {
-	Ref           string
-	ExchangeType  string // currently only "hyperliquid"
+	Ref string
+	// Venue the exchange object trades against: "hl-sim" (default)
+	// provisions a simulated Hyperliquid account for paper realms; "hl"
+	// provisions a live Hyperliquid account. The legacy long forms
+	// "sim-exchange" / "hyperliquid" are still accepted.
+	Venue string
+	// Deprecated: use Venue. ExchangeType carried no venue information (it
+	// was always "hyperliquid") and is ignored. Removed in a future release.
+	ExchangeType  string
 	OperationPath string
 }
 
 type PlaceOrderOptions struct {
-	Path          string
-	ObjectID      string
-	Coin          string
-	Side          OrderSide
-	OrderType     string // "MARKET" or "LIMIT"
-	Size          string
-	Price         string
-	Leverage      *int
-	ReduceOnly    bool
-	Isolated      bool
-	TimeInForce   string // "GTC" | "IOC" | "ALO"
+	Path        string
+	ObjectID    string
+	Coin        string
+	Side        OrderSide
+	OrderType   string // "MARKET" or "LIMIT"
+	Size        string
+	Price       string
+	Leverage    *int
+	ReduceOnly  bool
+	Isolated    bool
+	TimeInForce string // "GTC" | "IOC" | "ALO"
+	// ApplicationFeeBps is the application's fee on this order in tenths of a
+	// basis point.
+	ApplicationFeeBps *int
+	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
 	BuilderFeeBps *int
 	FeeTargets    []FeeTarget
 	IsTrigger     bool
@@ -178,11 +189,15 @@ type PlaceOrderOptions struct {
 }
 
 type ClosePositionOptions struct {
-	Path          string
-	ObjectID      string
-	Coin          string
-	Size          string
-	TimeInForce   string
+	Path        string
+	ObjectID    string
+	Coin        string
+	Size        string
+	TimeInForce string
+	// ApplicationFeeBps is the application's fee on this order in tenths of a
+	// basis point.
+	ApplicationFeeBps *int
+	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
 	BuilderFeeBps *int
 	FeeTargets    []FeeTarget
 	Isolated      *bool
@@ -215,7 +230,11 @@ type SetPositionTriggerOptions struct {
 	// Isolated overrides the isolated-margin inference (defaults from market meta).
 	Isolated *bool
 	// TimeInForce defaults to GTC.
-	TimeInForce   string
+	TimeInForce string
+	// ApplicationFeeBps is the application's fee on this order in tenths of a
+	// basis point.
+	ApplicationFeeBps *int
+	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
 	BuilderFeeBps *int
 	FeeTargets    []FeeTarget
 }
@@ -224,13 +243,17 @@ type SetPositionTriggerOptions struct {
 // stop-loss and/or take-profit to an open position in one call. At least one of
 // StopLossPx / TakeProfitPx is required.
 type SetPositionTpslOptions struct {
-	Path          string
-	ObjectID      string
-	Coin          string
-	StopLossPx    string
-	TakeProfitPx  string
-	IsMarket      *bool
-	Replace       *bool
+	Path         string
+	ObjectID     string
+	Coin         string
+	StopLossPx   string
+	TakeProfitPx string
+	IsMarket     *bool
+	Replace      *bool
+	// ApplicationFeeBps is the application's fee on this order in tenths of a
+	// basis point.
+	ApplicationFeeBps *int
+	// Deprecated: use ApplicationFeeBps. Alias kept for one release.
 	BuilderFeeBps *int
 	FeeTargets    []FeeTarget
 }

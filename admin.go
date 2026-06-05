@@ -137,13 +137,46 @@ func (a *ArcaAdmin) MintDeviceToken(ctx context.Context, opts MintDeviceTokenOpt
 
 // ---- Realms ----
 
-// CreateRealm creates a realm. Type defaults to development when empty.
+// CreateRealm creates a realm using the legacy single-axis type (defaults to
+// development when empty). The asset/lifecycle/backing axes are derived
+// server-side. Use CreateRealmWithAxes to set the two-axis model directly.
 func (a *ArcaAdmin) CreateRealm(ctx context.Context, name string, realmType RealmType, description string) (Realm, error) {
 	var out Realm
 	if realmType == "" {
 		realmType = RealmDevelopment
 	}
 	err := a.client.post(ctx, "/realms", map[string]any{"name": name, "type": realmType, "description": description}, &out)
+	return out, err
+}
+
+// CreateRealmAxes carries the optional two-axis realm inputs. A zero-value
+// field is omitted from the request and derived server-side.
+type CreateRealmAxes struct {
+	Asset     RealmAsset
+	Lifecycle RealmLifecycle
+	Backing   RealmBacking
+}
+
+// CreateRealmWithAxes creates a realm with explicit asset / lifecycle /
+// backing axes. When Asset is set it wins and the legacy type is derived from
+// it server-side; Backing defaults to chain. Any zero-value axis is omitted
+// and resolved server-side from the (optional) realmType.
+func (a *ArcaAdmin) CreateRealmWithAxes(ctx context.Context, name string, realmType RealmType, axes CreateRealmAxes, description string) (Realm, error) {
+	var out Realm
+	body := map[string]any{"name": name, "description": description}
+	if realmType != "" {
+		body["type"] = realmType
+	}
+	if axes.Asset != "" {
+		body["asset"] = axes.Asset
+	}
+	if axes.Lifecycle != "" {
+		body["lifecycle"] = axes.Lifecycle
+	}
+	if axes.Backing != "" {
+		body["backing"] = axes.Backing
+	}
+	err := a.client.post(ctx, "/realms", body, &out)
 	return out, err
 }
 

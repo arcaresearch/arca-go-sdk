@@ -950,12 +950,18 @@ func (m *WebSocketManager) OnObjectValuation(cb func(path string, val *ObjectVal
 	})
 }
 
-func (m *WebSocketManager) OnExchangeFill(cb func(*SimFill, RealmEvent)) func() {
-	return m.On(EventExchangeFill, func(ev RealmEvent) {
+func (m *WebSocketManager) OnFillPreviewed(cb func(*SimFill, RealmEvent)) func() {
+	return m.On(EventFillPreviewed, func(ev RealmEvent) {
 		if ev.Fill != nil {
 			cb(ev.Fill, ev)
 		}
 	})
+}
+
+// OnExchangeFill is deprecated: use OnFillPreviewed. The underlying event was
+// renamed from "exchange.fill" to "fill.previewed" pre-launch.
+func (m *WebSocketManager) OnExchangeFill(cb func(*SimFill, RealmEvent)) func() {
+	return m.OnFillPreviewed(cb)
 }
 
 func (m *WebSocketManager) OnFillRecorded(cb func(RealmEvent)) func() {

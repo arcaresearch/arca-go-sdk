@@ -7,6 +7,8 @@ package arca
 
 // ---- Realm ----
 
+// RealmType is the legacy single-axis realm type, retained as a derived alias
+// of RealmAsset (live↔production, paper↔development). Prefer Asset + Lifecycle.
 type RealmType string
 
 const (
@@ -14,16 +16,52 @@ const (
 	RealmProduction  RealmType = "production"
 )
 
+// RealmAsset is the value tier — the real-money risk axis. paper realms
+// transact simulated funds; live realms transact real money.
+type RealmAsset string
+
+const (
+	RealmAssetPaper RealmAsset = "paper"
+	RealmAssetLive  RealmAsset = "live"
+)
+
+// RealmLifecycle is the durability tier, orthogonal to RealmAsset. permanent
+// realms are never auto-reaped; temporary realms are disposable.
+type RealmLifecycle string
+
+const (
+	RealmLifecyclePermanent RealmLifecycle = "permanent"
+	RealmLifecycleTemporary RealmLifecycle = "temporary"
+)
+
+// RealmBacking is the custody backing tier. chain realms are backed by an
+// on-chain custody pool (every realm today); ledger-only is a future tier.
+type RealmBacking string
+
+const (
+	RealmBackingChain      RealmBacking = "chain"
+	RealmBackingLedgerOnly RealmBacking = "ledger-only"
+)
+
 type RealmSettings struct {
+	// DefaultApplicationFeeBps is the realm's default application fee in tenths
+	// of a basis point.
+	DefaultApplicationFeeBps *int `json:"defaultApplicationFeeBps,omitempty"`
+	// Deprecated: use DefaultApplicationFeeBps. Kept as a read alias for one
+	// release; responses still echo this field.
 	DefaultBuilderFeeBps *int `json:"defaultBuilderFeeBps,omitempty"`
 }
 
 type Realm struct {
-	ID          string         `json:"id"`
-	OrgID       string         `json:"orgId"`
-	Name        string         `json:"name"`
-	Slug        string         `json:"slug"`
+	ID    string `json:"id"`
+	OrgID string `json:"orgId"`
+	Name  string `json:"name"`
+	Slug  string `json:"slug"`
+	// Type is the legacy alias of Asset (live→production, paper→development).
 	Type        RealmType      `json:"type"`
+	Asset       RealmAsset     `json:"asset"`
+	Lifecycle   RealmLifecycle `json:"lifecycle"`
+	Backing     RealmBacking   `json:"backing"`
 	Description *string        `json:"description"`
 	Settings    *RealmSettings `json:"settings,omitempty"`
 	ArchivedAt  *string        `json:"archivedAt,omitempty"`
