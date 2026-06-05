@@ -1,25 +1,25 @@
 # Releasing the Go SDK
 
 The Go SDK is developed here in the monorepo at `sdk/go`, but its module path is
-`github.com/arcaresearch/arca-go-sdk` and it is **consumed from a dedicated
-public repo**: <https://github.com/arcaresearch/arca-go-sdk>. This mirrors the
+`github.com/arca-network/arca-go-sdk` and it is **consumed from a dedicated
+public repo**: <https://github.com/arca-network/arca-go-sdk>. This mirrors the
 TypeScript and Swift SDKs (developed here, published to `arca-typescript-sdk` /
 `arca-swift-sdk`).
 
 Why a separate public repo instead of consuming `sdk/go` directly:
 
-- Go requires the import path to match a real VCS root. `github.com/arcaresearch/arca-go-sdk`
+- Go requires the import path to match a real VCS root. `github.com/arca-network/arca-go-sdk`
   resolves to the public mirror's root, so consumers just run
-  `go get github.com/arcaresearch/arca-go-sdk@vX.Y.Z`.
+  `go get github.com/arca-network/arca-go-sdk@vX.Y.Z`.
 
 ## Consuming the SDK (for builders)
 
 ```bash
-go get github.com/arcaresearch/arca-go-sdk@latest
+go get github.com/arca-network/arca-go-sdk@latest
 ```
 
 ```go
-import arca "github.com/arcaresearch/arca-go-sdk"
+import arca "github.com/arca-network/arca-go-sdk"
 ```
 
 It's a public module, so no `GOPRIVATE` or auth is needed. It's licensed under

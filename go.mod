@@ -1,4 +1,4 @@
-module github.com/arcaresearch/arca-go-sdk
+module github.com/arca-network/arca-go-sdk
 
 go 1.25.0
 
