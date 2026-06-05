@@ -478,7 +478,11 @@ type LogoSource struct {
 	Width  int    `json:"width"`
 }
 
-type SimMetaAsset struct {
+// Market is a single tradable market's metadata. The Name field is the
+// canonical market id in the readable {exchange}:{dexIndex}:{symbol} form
+// (e.g. "hl:0:BTC", "hl:1:TSLA") and is the value to pass to Market,
+// trading, and market-data APIs. Symbol is display-only.
+type Market struct {
 	Name                string       `json:"name"`
 	Dex                 string       `json:"dex,omitempty"`
 	Symbol              string       `json:"symbol"`
@@ -514,7 +518,7 @@ type SimMetaAsset struct {
 }
 
 type SimMetaResponse struct {
-	Universe     []SimMetaAsset         `json:"universe"`
+	Universe     []Market               `json:"universe"`
 	MarginTables map[string]MarginTable `json:"marginTables,omitempty"`
 }
 

@@ -49,7 +49,7 @@ type Arca struct {
 	candleCDNBaseURL string
 
 	metaMu    sync.Mutex
-	metaCache map[string]SimMetaAsset
+	metaCache map[string]Market
 
 	twapMu     sync.Mutex
 	twapLimits *TwapLimits

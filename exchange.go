@@ -363,7 +363,7 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		isolated := false
 		if opts.Isolated != nil {
 			isolated = *opts.Isolated
-		} else if meta, merr := a.Asset(ctx, opts.Market); merr == nil && meta != nil {
+		} else if meta, merr := a.Market(ctx, opts.Market); merr == nil && meta != nil {
 			isolated = meta.OnlyIsolated
 		}
 
@@ -599,7 +599,7 @@ func (a *Arca) inferPositionCloseParams(ctx context.Context, objectID, coin stri
 	isolated := false
 	if isolatedOverride != nil {
 		isolated = *isolatedOverride
-	} else if meta, merr := a.Asset(ctx, coin); merr == nil && meta != nil {
+	} else if meta, merr := a.Market(ctx, coin); merr == nil && meta != nil {
 		if len(meta.MarginModes) > 0 {
 			isolated = len(meta.MarginModes) == 1 && meta.MarginModes[0] == "isolated"
 		} else {

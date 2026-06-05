@@ -16,7 +16,7 @@ import (
 type tpslMockState struct {
 	mu          sync.Mutex
 	positions   []SimPosition
-	meta        []SimMetaAsset
+	meta        []Market
 	openTrigger []SimOrder
 	posts       []map[string]any
 	deletes     []string
@@ -249,7 +249,7 @@ func TestSetStopLoss_TriggerLimitUsesLimitPrice(t *testing.T) {
 func TestSetStopLoss_InfersIsolatedFromMeta(t *testing.T) {
 	m := &tpslMockState{
 		positions: []SimPosition{{ID: "pos_cl", Market: "hl:1:CL", Side: Long, Size: "1", Leverage: 2}},
-		meta:      []SimMetaAsset{{Name: "hl:1:CL", OnlyIsolated: true}},
+		meta:      []Market{{Name: "hl:1:CL", OnlyIsolated: true}},
 	}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
