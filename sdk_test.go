@@ -483,7 +483,7 @@ func TestUpdateIsolatedMargin_PostsToEndpoint(t *testing.T) {
 	if gotPath != "/api/v1/objects/obj_1/exchange/isolated-margin" {
 		t.Errorf("path = %s", gotPath)
 	}
-	if gotBody["coin"] != "hl:1:CL" || gotBody["amount"] != "25" {
+	if gotBody["market"] != "hl:1:CL" || gotBody["amount"] != "25" {
 		t.Errorf("body = %+v", gotBody)
 	}
 	if resp.IsolatedMargin != "125" || resp.LiquidationPrice != "50" {
@@ -515,8 +515,8 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 	if gotPath != "/api/v1/objects/obj_1/exchange/margin-mode" {
 		t.Errorf("path = %s", gotPath)
 	}
-	if gotBody["coin"] != "hl:0:BTC" {
-		t.Errorf("body coin = %v", gotBody["coin"])
+	if gotBody["market"] != "hl:0:BTC" {
+		t.Errorf("body market = %v", gotBody["market"])
 	}
 	if gotBody["marginMode"] != "isolated" {
 		t.Errorf("body marginMode = %v", gotBody["marginMode"])
@@ -527,7 +527,7 @@ func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 }
 
 func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
-	raw := `{"id":"sps_1","accountId":"act_1","realmId":"rlm_1","coin":"hl:1:CL",` +
+	raw := `{"id":"sps_1","accountId":"act_1","realmId":"rlm_1","market":"hl:1:CL",` +
 		`"side":"long","size":"1","entryPrice":"50","leverage":5,"marginUsed":"10",` +
 		`"marginMode":"isolated","isolatedMargin":"125","liquidationPrice":"40"}`
 	var p SimPosition
@@ -543,7 +543,7 @@ func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
 
 	// Cross position: marginMode cross, isolatedMargin omitted entirely.
 	var cross SimPosition
-	if err := json.Unmarshal([]byte(`{"id":"sps_2","coin":"hl:0:BTC","marginMode":"cross"}`), &cross); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"sps_2","market":"hl:0:BTC","marginMode":"cross"}`), &cross); err != nil {
 		t.Fatalf("unmarshal cross: %v", err)
 	}
 	if cross.MarginMode != MarginModeCross || cross.IsolatedMargin != nil {
@@ -552,7 +552,7 @@ func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
 
 	// LeverageSetting carries the asset's margin mode.
 	var ls LeverageSetting
-	if err := json.Unmarshal([]byte(`{"coin":"hl:1:CL","leverage":5,"marginMode":"isolated"}`), &ls); err != nil {
+	if err := json.Unmarshal([]byte(`{"market":"hl:1:CL","leverage":5,"marginMode":"isolated"}`), &ls); err != nil {
 		t.Fatalf("unmarshal leverage: %v", err)
 	}
 	if ls.MarginMode != MarginModeIsolated {
