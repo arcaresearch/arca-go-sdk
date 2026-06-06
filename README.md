@@ -1,6 +1,6 @@
 # Arca Go SDK
 
-`github.com/arca-network/arca-go-sdk` — a Go SDK for the Arca platform
+`github.com/arcaresearch/arca-go-sdk` — a Go SDK for the Arca platform
 (accounts, payments, perpetuals trading, real-time streaming, and audit
 trails). It is a hand-written port of the [TypeScript SDK](../typescript) with
 idiomatic Go ergonomics: `context.Context` on every call, typed errors usable
@@ -10,15 +10,15 @@ streams.
 ## Install
 
 ```bash
-go get github.com/arca-network/arca-go-sdk@latest
+go get github.com/arcaresearch/arca-go-sdk@latest
 ```
 
 ```go
-import arca "github.com/arca-network/arca-go-sdk"
+import arca "github.com/arcaresearch/arca-go-sdk"
 ```
 
 Requires Go 1.23+. It's a public module published from
-[`github.com/arca-network/arca-go-sdk`](https://github.com/arca-network/arca-go-sdk),
+[`github.com/arcaresearch/arca-go-sdk`](https://github.com/arcaresearch/arca-go-sdk),
 so no `GOPRIVATE` or auth is needed. Pin a specific release with
 `@vX.Y.Z` (e.g. `@v0.1.1`); `v0.1.0` is retracted (see [RELEASING.md](./RELEASING.md)).
 
@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"log"
 
-	arca "github.com/arca-network/arca-go-sdk"
+	arca "github.com/arcaresearch/arca-go-sdk"
 )
 
 func main() {

@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	arca "github.com/arca-network/arca-go-sdk"
+	arca "github.com/arcaresearch/arca-go-sdk"
 )
 
 func main() {

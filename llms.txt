@@ -1,12 +1,12 @@
 # Arca Go SDK — AI Context
 
-> github.com/arca-network/arca-go-sdk — Go SDK for the Arca financial
+> github.com/arcaresearch/arca-go-sdk — Go SDK for the Arca financial
 > infrastructure platform (accounts, payments, perpetuals trading, real-time
 > streaming, audit trails). Hand-written port of @arca-network/sdk (TypeScript).
 
-go get github.com/arca-network/arca-go-sdk
+go get github.com/arcaresearch/arca-go-sdk
 
-Import path is `github.com/arca-network/arca-go-sdk`; the package name is `arca`.
+Import path is `github.com/arcaresearch/arca-go-sdk`; the package name is `arca`.
 
 ## Conventions (Go-specific)
 
