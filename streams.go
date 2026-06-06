@@ -205,7 +205,7 @@ type BalanceUpdate struct {
 
 // CandleUpdate is delivered by CandleWatchStream.
 type CandleUpdate struct {
-	Market     string
+	Market   string
 	Interval CandleInterval
 	Candle   Candle
 }
