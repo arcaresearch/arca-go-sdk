@@ -153,7 +153,8 @@ type CreatePerpsExchangeOptions struct {
 	// Venue the exchange object trades against: "hl-sim" (default)
 	// provisions a simulated Hyperliquid account for paper realms; "hl"
 	// provisions a live Hyperliquid account. The legacy long forms
-	// "sim-exchange" / "hyperliquid" are still accepted.
+	// "sim-exchange" / "hyperliquid" are no longer accepted and are
+	// rejected with a validation error; use the canonical "hl-sim" / "hl".
 	Venue string
 	// Deprecated: use Venue. ExchangeType carried no venue information (it
 	// was always "hyperliquid") and is ignored. Removed in a future release.
