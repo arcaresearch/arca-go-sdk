@@ -45,11 +45,13 @@ type Config struct {
 	Cache *CacheConfig
 }
 
-// Fees holds the platform's fixed fees.
+// Fees holds the platform's fixed fees. The Arca network takes no transfer
+// fee — only applications (builder / application fees) and the underlying
+// venue charge.
 var Fees = struct {
 	ExchangeTransfer string
 }{
-	ExchangeTransfer: "0.05",
+	ExchangeTransfer: "0",
 }
 
 // New creates an Arca client from a Config. Call Ready before other methods to
