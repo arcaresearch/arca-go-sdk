@@ -448,10 +448,11 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
 }
 
-// SetStopLoss attaches a stop-loss to the open position for opts.Coin. The
-// order is placed unsized (sizeToMax=true, reduceOnly) — when it fires it
-// closes the entire live position regardless of size — with the closing side
-// inferred from the position (long → sell, short → buy). By
+// SetStopLoss attaches a stop-loss to the open position for opts.Coin. By
+// default the order is placed unsized (sizeToMax=true, reduceOnly) — when it
+// fires it closes the entire live position regardless of size. Set opts.Size to
+// a positive base-unit quantity for a SIZED partial close (e.g. stop out half).
+// The closing side is inferred from the position (long → sell, short → buy). By
 // default any existing stop-loss for the position is replaced; set Replace to a
 // pointer to false to stack. Returns an OrderHandle — Wait blocks until the
 // trigger is resting (WAITING_FOR_TRIGGER); OnFill fires when it executes.
@@ -508,20 +509,29 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		if !isMarket {
 			orderType = "LIMIT"
 		}
+		// A non-empty Size makes this a SIZED partial reduce-only trigger
+		// (closes that quantity, reduce-only caps it at the live position);
+		// empty Size keeps the unsized sizeToMax close of the whole position.
+		sizeVal := "0"
+		if opts.Size != "" {
+			sizeVal = opts.Size
+		}
 		body := map[string]any{
 			"realmId":     a.currentRealmID(),
 			"path":        opts.Path,
 			"market":      opts.Market,
 			"side":        side,
 			"orderType":   orderType,
-			"size":        "0",
-			"sizeToMax":   true,
+			"size":        sizeVal,
 			"reduceOnly":  true,
 			"timeInForce": defaultStr(opts.TimeInForce, "GTC"),
 			"isTrigger":   true,
 			"triggerPx":   opts.TriggerPx,
 			"isMarket":    isMarket,
 			"tpsl":        tpsl,
+		}
+		if opts.Size == "" {
+			body["sizeToMax"] = true
 		}
 		if !isMarket {
 			body["price"] = opts.LimitPrice
@@ -569,16 +579,21 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	}
 	// One opaque group id links both legs as a true one-cancels-the-other
 	// bracket: when either leg fills (even partially), the venue cancels the
-	// sibling with cancelReason=sibling_filled. An explicit OcoGroupID reuses a
-	// known group; otherwise mint a fresh one.
+	// sibling with cancelReason=sibling_filled. That is the right default for
+	// two unsized whole-position legs. But when EITHER leg is sized, auto-OCO is
+	// a footgun — a partial fill of the sized leg (e.g. scaling out half via the
+	// TP) would cancel the sibling stop protecting the remainder. So we only
+	// auto-link when both legs are unsized; a caller who wants sized legs linked
+	// passes an explicit OcoGroupID.
+	anySized := opts.StopLossSz != "" || opts.TakeProfitSz != ""
 	ocoGroupID := opts.OcoGroupID
-	if ocoGroupID == "" {
+	if ocoGroupID == "" && !anySized {
 		ocoGroupID = generateOcoGroupID()
 	}
 	if opts.StopLossPx != "" {
 		sl := a.SetStopLoss(ctx, SetPositionTriggerOptions{
 			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Market: opts.Market,
-			TriggerPx: opts.StopLossPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
+			TriggerPx: opts.StopLossPx, Size: opts.StopLossSz, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
 			OcoGroupID: ocoGroupID,
 		})
@@ -590,7 +605,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	if opts.TakeProfitPx != "" {
 		tp := a.SetTakeProfit(ctx, SetPositionTriggerOptions{
 			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Market: opts.Market,
-			TriggerPx: opts.TakeProfitPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
+			TriggerPx: opts.TakeProfitPx, Size: opts.TakeProfitSz, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
 			OcoGroupID: ocoGroupID,
 		})
@@ -646,21 +661,27 @@ func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (Op
 		triggerOrderType = "LIMIT"
 	}
 
-	trigger := func(tpsl, triggerPx string) map[string]any {
+	trigger := func(tpsl, triggerPx, sz string) map[string]any {
 		m := map[string]any{
-			"market":    opts.Market,
-			"side":      closingSide,
-			"orderType": triggerOrderType,
-			// Unsized: carries no quantity and closes the whole live position
-			// when it fires. size is ignored by the venue.
-			"size":        "0",
-			"sizeToMax":   true,
+			"market":      opts.Market,
+			"side":        closingSide,
+			"orderType":   triggerOrderType,
 			"reduceOnly":  true,
 			"isTrigger":   true,
 			"triggerPx":   triggerPx,
 			"isMarket":    triggersAreMarket,
 			"tpsl":        tpsl,
 			"timeInForce": tif,
+		}
+		if sz != "" {
+			// Sized: a partial reduce-only close of exactly sz (reduce-only
+			// caps it at the live position). sizeToMax stays false.
+			m["size"] = sz
+		} else {
+			// Unsized: carries no quantity and closes the whole live position
+			// when it fires. size is ignored by the venue.
+			m["size"] = "0"
+			m["sizeToMax"] = true
 		}
 		if opts.Isolated {
 			m["isolated"] = true
@@ -692,10 +713,10 @@ func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (Op
 	}
 	orders := []map[string]any{entry}
 	if opts.TakeProfitPx != "" {
-		orders = append(orders, trigger("tp", opts.TakeProfitPx))
+		orders = append(orders, trigger("tp", opts.TakeProfitPx, opts.TakeProfitSz))
 	}
 	if opts.StopLossPx != "" {
-		orders = append(orders, trigger("sl", opts.StopLossPx))
+		orders = append(orders, trigger("sl", opts.StopLossPx, opts.StopLossSz))
 	}
 
 	if err := a.ensureReady(ctx); err != nil {

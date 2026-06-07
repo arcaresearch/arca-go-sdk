@@ -158,6 +158,52 @@ func TestOpenWithBracket_OnlyStopLoss(t *testing.T) {
 	}
 }
 
+// TestOpenWithBracket_SizedTakeProfit pins the sized-partial-leg contract: a
+// non-empty TakeProfitSz makes the TP leg a sized reduce-only close (carries
+// its base-unit Size, NO sizeToMax), while a leg with no size stays unsized
+// (size "0" + sizeToMax true). This is what enables "scale out half" through
+// the typed bracket surface.
+func TestOpenWithBracket_SizedTakeProfit(t *testing.T) {
+	m := &bracketMockState{}
+	srv := newBracketTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	_, err := a.OpenWithBracket(context.Background(), OpenBracketOptions{
+		Path: "/op/bracket/sized", ObjectID: "obj_1", Market: "hl:0:BTC",
+		Side: Buy, Size: "0.02",
+		TakeProfitPx: "72000", TakeProfitSz: "0.01", // sized: scale out half
+		StopLossPx: "58000", // unsized: protect the whole position
+	})
+	if err != nil {
+		t.Fatalf("OpenWithBracket: %v", err)
+	}
+	orders, _ := m.posts[0]["orders"].([]any)
+	findLeg := func(tpsl string) map[string]any {
+		for _, o := range orders {
+			mo, _ := o.(map[string]any)
+			if mo["tpsl"] == tpsl {
+				return mo
+			}
+		}
+		return nil
+	}
+	tp := findLeg("tp")
+	if tp["size"] != "0.01" {
+		t.Errorf("sized TP size = %v, want 0.01", tp["size"])
+	}
+	if _, ok := tp["sizeToMax"]; ok {
+		t.Errorf("sized TP must NOT carry sizeToMax, got %+v", tp)
+	}
+	if tp["reduceOnly"] != true {
+		t.Errorf("sized TP reduceOnly = %v, want true", tp["reduceOnly"])
+	}
+	sl := findLeg("sl")
+	if sl["size"] != "0" || sl["sizeToMax"] != true {
+		t.Errorf("unsized SL wrong: size=%v sizeToMax=%v", sl["size"], sl["sizeToMax"])
+	}
+}
+
 // TestOpenWithBracket_RequiresATrigger rejects a bracket with neither TP nor SL
 // before any network call.
 func TestOpenWithBracket_RequiresATrigger(t *testing.T) {

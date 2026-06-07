@@ -237,6 +237,12 @@ type SetPositionTriggerOptions struct {
 	Leverage *int
 	// Isolated overrides the isolated-margin inference (defaults from market meta).
 	Isolated *bool
+	// Size, when set to a positive base-unit quantity, places a SIZED partial
+	// reduce-only trigger that closes only that quantity when it fires
+	// (reduce-only caps it at the live position). Empty (the default) places an
+	// unsized (sizeToMax) trigger that closes the ENTIRE live position. Use a
+	// sized trigger to scale out of a position — e.g. take profit on half.
+	Size string
 	// TimeInForce defaults to GTC.
 	TimeInForce string
 	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
@@ -265,9 +271,22 @@ type SetPositionTpslOptions struct {
 	// of a basis point.
 	ApplicationFeeTenthsBps *int
 	FeeTargets              []FeeTarget
+	// StopLossSz / TakeProfitSz, when set to a positive base-unit quantity,
+	// make the corresponding leg a SIZED partial reduce-only trigger (closing
+	// only that quantity) instead of an unsized whole-position trigger. Empty
+	// keeps the whole-position (sizeToMax) behavior for that leg.
+	//
+	// When EITHER leg is sized, the two legs are NOT auto-linked as
+	// one-cancels-the-other — otherwise a PARTIAL fill of the sized leg would
+	// cancel the sibling (e.g. scaling out half via the TP would drop the SL
+	// protecting the remainder). Pass an explicit OcoGroupID if you do want the
+	// two sized legs to cancel each other. Two unsized legs keep the auto-OCO.
+	StopLossSz   string
+	TakeProfitSz string
 	// OcoGroupID overrides the auto-generated bracket id that links the SL and
 	// TP legs as one-cancels-the-other. Leave empty to let SetPositionTpsl mint
-	// a fresh opaque id (the common case); set it only to reuse a known group.
+	// a fresh opaque id (the common case for two unsized legs); set it only to
+	// reuse a known group or to force-link sized legs.
 	OcoGroupID string
 }
 
@@ -310,6 +329,19 @@ type OpenBracketOptions struct {
 	TakeProfitPx string
 	// StopLossPx is the stop-loss trigger (mark) price. Empty skips the SL leg.
 	StopLossPx string
+	// TakeProfitSz / StopLossSz, when set to a positive base-unit quantity, make
+	// the corresponding trigger leg a SIZED partial reduce-only close (that
+	// quantity only) instead of the default whole-position (sizeToMax) close.
+	// Empty keeps the whole-position behavior.
+	//
+	// NOTE: the venue links a bracket's TP and SL legs as one-cancels-the-other,
+	// and a fill on either — including a PARTIAL fill of a sized leg — cancels
+	// the sibling. So a partial TP combined with an SL in the SAME bracket will
+	// cancel that SL when the TP fills. To scale out and keep a stop on the
+	// remainder, place the partial TP separately (SetTakeProfit with a Size) and
+	// keep the stop unlinked, rather than in one bracket.
+	TakeProfitSz string
+	StopLossSz   string
 	// TriggersAreMarket fires the TP/SL legs as market orders when triggered.
 	// Nil defaults to true.
 	TriggersAreMarket *bool

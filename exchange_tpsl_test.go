@@ -109,6 +109,34 @@ func TestSetStopLoss_LongPlacesSellUnsized(t *testing.T) {
 	}
 }
 
+// TestSetTakeProfit_SizedPartial pins the sized position-trigger path: a
+// non-empty Size makes the leg a sized reduce-only close (carries Size, NO
+// sizeToMax) so a builder can scale out a fixed quantity of a position.
+func TestSetTakeProfit_SizedPartial(t *testing.T) {
+	m := &tpslMockState{positions: []SimPosition{longBTC()}}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	h := a.SetTakeProfit(context.Background(), SetPositionTriggerOptions{
+		Path: "/op/tp/sized", ObjectID: "obj_1", Market: "hl:0:BTC",
+		TriggerPx: "70000", Size: "0.25", Isolated: tpBoolPtr(false),
+	})
+	if _, err := h.Submitted(context.Background()); err != nil {
+		t.Fatalf("SetTakeProfit: %v", err)
+	}
+	b := m.posts[0]
+	if b["size"] != "0.25" {
+		t.Errorf("size = %v, want 0.25 (sized partial)", b["size"])
+	}
+	if _, ok := b["sizeToMax"]; ok {
+		t.Errorf("sized trigger must NOT carry sizeToMax, got %+v", b)
+	}
+	if b["reduceOnly"] != true {
+		t.Errorf("reduceOnly = %v, want true", b["reduceOnly"])
+	}
+}
+
 func TestSetTakeProfit_ShortPlacesBuyUnsized(t *testing.T) {
 	m := &tpslMockState{positions: []SimPosition{{ID: "pos_2", Market: "hl:0:ETH", Side: Short, Size: "2", Leverage: 3}}}
 	srv := newTpslTestServer(m)
@@ -338,6 +366,67 @@ func TestSetPositionTpsl_ExplicitOcoGroupID(t *testing.T) {
 	}
 	if m.posts[0]["ocoGroupId"] != "oco_explicit" || m.posts[1]["ocoGroupId"] != "oco_explicit" {
 		t.Errorf("explicit group id not applied to both legs: sl=%v tp=%v",
+			m.posts[0]["ocoGroupId"], m.posts[1]["ocoGroupId"])
+	}
+}
+
+// TestSetPositionTpsl_SizedSkipsAutoOco pins the OCO footgun guard: when either
+// leg is sized, SetPositionTpsl must NOT auto-link the legs with a shared
+// ocoGroupId — otherwise a partial fill of the sized TP would cancel the SL
+// protecting the remainder ("scale out half, keep the stop"). The sizes are
+// still threaded to each leg.
+func TestSetPositionTpsl_SizedSkipsAutoOco(t *testing.T) {
+	m := &tpslMockState{positions: []SimPosition{longBTC()}}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	if _, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
+		Path: "/op/tpsl/sized", ObjectID: "obj_1", Market: "hl:0:BTC",
+		StopLossPx: "54000", TakeProfitPx: "70000",
+		TakeProfitSz: "0.25", // scale out a quarter at the target
+	}); err != nil {
+		t.Fatalf("SetPositionTpsl: %v", err)
+	}
+	if len(m.posts) != 2 {
+		t.Fatalf("expected 2 POSTs, got %d", len(m.posts))
+	}
+	for _, p := range m.posts {
+		if _, ok := p["ocoGroupId"]; ok {
+			t.Errorf("sized legs must NOT be auto-OCO-linked, got %+v", p)
+		}
+	}
+	// SL leg unsized (whole position), TP leg sized (the scale-out quarter).
+	sl, tp := m.posts[0], m.posts[1]
+	if sl["size"] != "0" || sl["sizeToMax"] != true {
+		t.Errorf("SL should stay unsized: %+v", sl)
+	}
+	if tp["size"] != "0.25" {
+		t.Errorf("TP size = %v, want 0.25", tp["size"])
+	}
+	if _, ok := tp["sizeToMax"]; ok {
+		t.Errorf("sized TP must NOT carry sizeToMax: %+v", tp)
+	}
+}
+
+// TestSetPositionTpsl_SizedRespectsExplicitOco pins that an explicit OcoGroupID
+// still force-links sized legs (the caller deliberately opts in), overriding the
+// auto-skip in TestSetPositionTpsl_SizedSkipsAutoOco.
+func TestSetPositionTpsl_SizedRespectsExplicitOco(t *testing.T) {
+	m := &tpslMockState{positions: []SimPosition{longBTC()}}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	if _, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
+		Path: "/op/tpsl/sizedoco", ObjectID: "obj_1", Market: "hl:0:BTC",
+		StopLossPx: "54000", TakeProfitPx: "70000",
+		TakeProfitSz: "0.25", StopLossSz: "0.25", OcoGroupID: "oco_forced",
+	}); err != nil {
+		t.Fatalf("SetPositionTpsl: %v", err)
+	}
+	if m.posts[0]["ocoGroupId"] != "oco_forced" || m.posts[1]["ocoGroupId"] != "oco_forced" {
+		t.Errorf("explicit group id should link sized legs: sl=%v tp=%v",
 			m.posts[0]["ocoGroupId"], m.posts[1]["ocoGroupId"])
 	}
 }
