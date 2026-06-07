@@ -278,6 +278,56 @@ type SetPositionTpslResult struct {
 	TakeProfit *OrderHandle
 }
 
+// OpenBracketOptions parameterizes OpenWithBracket, which opens a position and
+// attaches reduce-only TP/SL triggers in ONE atomic batch (Hyperliquid
+// normalTpsl parity). The entry and its triggers are submitted as a single
+// signed batch to one operation: the whole bracket validates and commits at the
+// venue, or none of it does. The trigger legs arm only when the entry fills, and
+// the venue links them with a shared one-cancels-the-other group. At least one
+// of TakeProfitPx / StopLossPx is required.
+type OpenBracketOptions struct {
+	// Path is the operation idempotency key; it owns the whole bracket.
+	Path     string
+	ObjectID string
+	Market   string
+	// Side is the entry order side.
+	Side OrderSide
+	// OrderType is the entry order type ("MARKET" or "LIMIT"; default "MARKET").
+	OrderType string
+	// Size is the entry size in base-asset units.
+	Size string
+	// Price is the entry limit price (required when OrderType is "LIMIT").
+	Price string
+	// Leverage optionally overrides the entry leverage (required with Isolated).
+	Leverage *int
+	// Isolated targets the asset's isolated-margin bucket.
+	Isolated bool
+	// TimeInForce defaults to "GTC".
+	TimeInForce string
+	// ApplicationFeeTenthsBps is applied to every leg, in tenths of a bp.
+	ApplicationFeeTenthsBps *int
+	// TakeProfitPx is the take-profit trigger (mark) price. Empty skips the TP leg.
+	TakeProfitPx string
+	// StopLossPx is the stop-loss trigger (mark) price. Empty skips the SL leg.
+	StopLossPx string
+	// TriggersAreMarket fires the TP/SL legs as market orders when triggered.
+	// Nil defaults to true.
+	TriggersAreMarket *bool
+	// Grouping is the batch grouping ("normalTpsl" default, or "positionTpsl").
+	Grouping string
+}
+
+// OpenBracketResult holds one OrderHandle per leg placed by OpenWithBracket.
+// All handles are backed by the single bracket operation, so Wait on any of
+// them resolves when the batch is placed; each handle's Filled/OnFill/Cancel
+// target that specific leg's order. A leg is nil when its trigger price was not
+// provided.
+type OpenBracketResult struct {
+	Entry      *OrderHandle
+	TakeProfit *OrderHandle
+	StopLoss   *OrderHandle
+}
+
 // ClearPositionTpslOptions parameterizes ClearPositionTpsl. Tpsl ("tp" or "sl")
 // narrows the clear to a single leg; empty clears both.
 type ClearPositionTpslOptions struct {

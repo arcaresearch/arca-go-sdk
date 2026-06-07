@@ -83,6 +83,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Resize order (sized only) | client.ModifyOrder(ctx, ModifyOrderOptions{...}) — unsized triggers rejected |
 | Close position | client.ClosePosition(ctx, ClosePositionOptions{...}) |
 | Position TP/SL | client.SetStopLoss / SetTakeProfit / SetPositionTpsl / ClearPositionTpsl |
+| Open with atomic bracket | client.OpenWithBracket(ctx, OpenBracketOptions{...}) → OpenBracketResult{Entry, TakeProfit?, StopLoss?} |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
 | Exchange state | client.GetExchangeState(ctx, id) |
 | Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage) |
@@ -165,6 +166,10 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 ## TP/SL is an OCO bracket; cancelled orders carry a reason
 
 SetPositionTpsl stamps one auto-generated OcoGroupID on both legs; when either fills (even partially) the venue cancels the other and sets CancelReason="sibling_filled". Pass an explicit OcoGroupID (on SetPositionTpslOptions, SetPositionTriggerOptions, or PlaceOrderOptions) to build or reuse your own bracket — it is advisory metadata, forwarded to the venue but NOT part of the order signature. A CANCELLED SimOrder exposes CancelReason (one of user_requested, sibling_filled, position_closed, position_flipped, liquidated, position_gone), readable on-demand via GetOrder / ListOrders. Two placement rules match Hyperliquid: an ALO (post-only) limit that would immediately cross the book is rejected (use GTC/IOC to take liquidity), and a trigger set on the wrong side of the current mark (one that would fire immediately) is rejected.
+
+## OpenWithBracket opens a position + TP/SL as one atomic batch
+
+OpenWithBracket(ctx, OpenBracketOptions{Path, ObjectID, Market, Side, Size, TakeProfitPx?, StopLossPx?, ...}) opens a position and attaches its reduce-only TP/SL triggers in ONE atomic batch (Hyperliquid normalTpsl parity). The entry and its trigger legs are submitted as a single signed batch to one operation (POST /objects/{id}/exchange/orders/batch): the whole bracket validates and commits, or none of it does (all-or-nothing). The trigger legs ARM ONLY WHEN THE ENTRY FILLS — they can't fire on mark price before the position exists — and the venue server-stamps a shared OCO group on them (the entry is excluded). Returns OpenBracketResult with one *OrderHandle per leg (Entry, TakeProfit, StopLoss), all backed by the single bracket operation; each handle's Filled/OnFill/Cancel targets that leg. At least one of TakeProfitPx/StopLossPx is required; the trigger legs are unsized (SizeToMax) and close the whole position. Use SetPositionTpsl instead to attach TP/SL to an already-open position.
 
 ## Not yet ported (REST equivalents available)
 

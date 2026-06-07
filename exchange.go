@@ -602,6 +602,172 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	return result, nil
 }
 
+// OpenWithBracket opens a position and attaches reduce-only TP/SL triggers in
+// ONE atomic batch — Hyperliquid normalTpsl parity. The entry and its triggers
+// are submitted as a single signed batch to one operation: the whole bracket
+// validates and commits at the venue, or none of it does. The trigger legs arm
+// only when the entry fills, and the venue links them with a shared
+// one-cancels-the-other group so a fill on one cancels its sibling.
+//
+// Returns one OrderHandle per leg (Entry, plus TakeProfit / StopLoss when their
+// trigger price is set), all backed by the single bracket operation. At least
+// one of TakeProfitPx / StopLossPx is required. The TP/SL legs are unsized
+// (sizeToMax) reduce-only triggers that close the entire position.
+func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (OpenBracketResult, error) {
+	var result OpenBracketResult
+	if opts.TakeProfitPx == "" && opts.StopLossPx == "" {
+		return result, &ValidationError{newArcaError("VALIDATION_ERROR",
+			"OpenWithBracket requires at least one of TakeProfitPx or StopLossPx", "")}
+	}
+	entryType := opts.OrderType
+	if entryType == "" {
+		entryType = "MARKET"
+	}
+	if entryType == "LIMIT" && opts.Price == "" {
+		return result, &ValidationError{newArcaError("VALIDATION_ERROR",
+			"a LIMIT entry requires a Price", "")}
+	}
+	grouping := opts.Grouping
+	if grouping == "" {
+		grouping = "normalTpsl"
+	}
+	triggersAreMarket := true
+	if opts.TriggersAreMarket != nil {
+		triggersAreMarket = *opts.TriggersAreMarket
+	}
+	// The TP/SL legs close the position the entry opens — opposite side.
+	closingSide := OrderSide("sell")
+	if opts.Side == "sell" {
+		closingSide = "buy"
+	}
+	tif := defaultStr(opts.TimeInForce, "GTC")
+	triggerOrderType := "MARKET"
+	if !triggersAreMarket {
+		triggerOrderType = "LIMIT"
+	}
+
+	trigger := func(tpsl, triggerPx string) map[string]any {
+		m := map[string]any{
+			"market":    opts.Market,
+			"side":      closingSide,
+			"orderType": triggerOrderType,
+			// Unsized: carries no quantity and closes the whole live position
+			// when it fires. size is ignored by the venue.
+			"size":        "0",
+			"sizeToMax":   true,
+			"reduceOnly":  true,
+			"isTrigger":   true,
+			"triggerPx":   triggerPx,
+			"isMarket":    triggersAreMarket,
+			"tpsl":        tpsl,
+			"timeInForce": tif,
+		}
+		if opts.Isolated {
+			m["isolated"] = true
+		}
+		if opts.ApplicationFeeTenthsBps != nil {
+			m["applicationFeeTenthsBps"] = *opts.ApplicationFeeTenthsBps
+		}
+		return m
+	}
+
+	entry := map[string]any{
+		"market":      opts.Market,
+		"side":        opts.Side,
+		"orderType":   entryType,
+		"size":        opts.Size,
+		"timeInForce": tif,
+	}
+	if opts.Price != "" {
+		entry["price"] = opts.Price
+	}
+	if opts.Leverage != nil {
+		entry["leverage"] = *opts.Leverage
+	}
+	if opts.Isolated {
+		entry["isolated"] = true
+	}
+	if opts.ApplicationFeeTenthsBps != nil {
+		entry["applicationFeeTenthsBps"] = *opts.ApplicationFeeTenthsBps
+	}
+	orders := []map[string]any{entry}
+	if opts.TakeProfitPx != "" {
+		orders = append(orders, trigger("tp", opts.TakeProfitPx))
+	}
+	if opts.StopLossPx != "" {
+		orders = append(orders, trigger("sl", opts.StopLossPx))
+	}
+
+	if err := a.ensureReady(ctx); err != nil {
+		return result, err
+	}
+	var resp OrderOperationResponse
+	body := map[string]any{
+		"realmId":  a.currentRealmID(),
+		"path":     opts.Path,
+		"grouping": grouping,
+		"orders":   orders,
+	}
+	if err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/orders/batch", body, &resp); err != nil {
+		return result, err
+	}
+	if resp.Operation.State == OpFailed || resp.Operation.State == OpExpired {
+		return result, newOperationFailedError(resp.Operation.snapshot())
+	}
+
+	// Parse the batch outcome's per-leg order summaries so each leg's handle
+	// can resolve to its own orderId.
+	var parsed struct {
+		Orders []map[string]any `json:"orders"`
+	}
+	if resp.Operation.Outcome != nil && *resp.Operation.Outcome != "" {
+		_ = json.Unmarshal([]byte(*resp.Operation.Outcome), &parsed)
+	}
+	legByTpsl := func(tpsl string) map[string]any {
+		for _, o := range parsed.Orders {
+			if s, _ := o["tpsl"].(string); s == tpsl {
+				return o
+			}
+		}
+		return nil
+	}
+
+	// buildLeg returns an OrderHandle whose operation outcome is rewritten to
+	// the leg's own order summary (which carries orderId), so resolveOrderID
+	// targets that leg even though all legs share the single bracket operation.
+	buildLeg := func(legOutcome map[string]any) *OrderHandle {
+		legResp := resp
+		op := resp.Operation
+		if legOutcome != nil {
+			if b, err := json.Marshal(legOutcome); err == nil {
+				s := string(b)
+				op.Outcome = &s
+			}
+		}
+		legResp.Operation = op
+		call := func() (OrderOperationResponse, error) { return legResp, nil }
+		base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
+			func(c context.Context, id string, t time.Duration) (*Operation, error) {
+				return a.waitForOperation(c, id, t)
+			},
+			nil, 0)
+		return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	}
+
+	var entryOutcome map[string]any
+	if len(parsed.Orders) > 0 {
+		entryOutcome = parsed.Orders[0]
+	}
+	result.Entry = buildLeg(entryOutcome)
+	if opts.TakeProfitPx != "" {
+		result.TakeProfit = buildLeg(legByTpsl("tp"))
+	}
+	if opts.StopLossPx != "" {
+		result.StopLoss = buildLeg(legByTpsl("sl"))
+	}
+	return result, nil
+}
+
 // ClearPositionTpsl cancels resting unsized (sizeToMax) trigger orders for
 // opts.Coin. Tpsl ("tp"/"sl") narrows the clear to one leg; empty clears both.
 // Returns the orders that were targeted for cancellation.
