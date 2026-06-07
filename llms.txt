@@ -157,7 +157,7 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 3. Use canonical coin ids ("hl:0:BTC", never "BTC").
 4. FundAccount/DefundAccount are dev-only; use CreatePaymentLink in production.
 5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
-6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage on PlaceOrder. Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
+6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage when opening/increasing on PlaceOrder; a ReduceOnly close/trim is accepted without Leverage (uses the position's current leverage, never re-margins). Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
 
 ## Not yet ported (REST equivalents available)
 
