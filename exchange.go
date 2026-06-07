@@ -250,8 +250,8 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		if opts.Tpsl != "" {
 			body["tpsl"] = opts.Tpsl
 		}
-		if opts.Grouping != "" {
-			body["grouping"] = opts.Grouping
+		if opts.SizeToMax {
+			body["sizeToMax"] = true
 		}
 		if opts.UseMax {
 			body["useMax"] = true
@@ -410,9 +410,9 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 }
 
 // SetStopLoss attaches a stop-loss to the open position for opts.Coin. The
-// order is placed with grouping=positionTpsl, reduceOnly, size 0 (the venue
-// fills it from the live position and resizes it as the position changes), and
-// the closing side inferred from the position (long → sell, short → buy). By
+// order is placed unsized (sizeToMax=true, reduceOnly) — when it fires it
+// closes the entire live position regardless of size — with the closing side
+// inferred from the position (long → sell, short → buy). By
 // default any existing stop-loss for the position is replaced; set Replace to a
 // pointer to false to stack. Returns an OrderHandle — Wait blocks until the
 // trigger is resting (WAITING_FOR_TRIGGER); OnFill fires when it executes.
@@ -427,9 +427,8 @@ func (a *Arca) SetTakeProfit(ctx context.Context, opts SetPositionTriggerOptions
 }
 
 const (
-	exTpslStopLoss    = "sl"
-	exTpslTakeProfit  = "tp"
-	exGroupingPosTpsl = "positionTpsl"
+	exTpslStopLoss   = "sl"
+	exTpslTakeProfit = "tp"
 )
 
 func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPositionTriggerOptions) *OrderHandle {
@@ -477,13 +476,13 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 			"side":        side,
 			"orderType":   orderType,
 			"size":        "0",
+			"sizeToMax":   true,
 			"reduceOnly":  true,
 			"timeInForce": defaultStr(opts.TimeInForce, "GTC"),
 			"isTrigger":   true,
 			"triggerPx":   opts.TriggerPx,
 			"isMarket":    isMarket,
 			"tpsl":        tpsl,
-			"grouping":    exGroupingPosTpsl,
 		}
 		if !isMarket {
 			body["price"] = opts.LimitPrice
@@ -551,9 +550,9 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 	return result, nil
 }
 
-// ClearPositionTpsl cancels resting positionTpsl trigger orders for opts.Coin.
-// Tpsl ("tp"/"sl") narrows the clear to one leg; empty clears both. Returns the
-// orders that were targeted for cancellation.
+// ClearPositionTpsl cancels resting unsized (sizeToMax) trigger orders for
+// opts.Coin. Tpsl ("tp"/"sl") narrows the clear to one leg; empty clears both.
+// Returns the orders that were targeted for cancellation.
 func (a *Arca) ClearPositionTpsl(ctx context.Context, opts ClearPositionTpslOptions) ([]SimOrder, error) {
 	existing, err := a.findPositionTpslOrders(ctx, opts.ObjectID, opts.Market, opts.Tpsl)
 	if err != nil {
@@ -609,8 +608,8 @@ func (a *Arca) inferPositionCloseParams(ctx context.Context, objectID, coin stri
 	return side, leverage, isolated, nil
 }
 
-// findPositionTpslOrders returns resting positionTpsl trigger orders for coin,
-// optionally narrowed to a single tp/sl leg.
+// findPositionTpslOrders returns resting unsized (sizeToMax) trigger orders for
+// coin, optionally narrowed to a single tp/sl leg.
 func (a *Arca) findPositionTpslOrders(ctx context.Context, objectID, coin, tpsl string) ([]SimOrder, error) {
 	orders, err := a.ListOrders(ctx, objectID, string(OrderWaitingTrigger))
 	if err != nil {
@@ -618,7 +617,7 @@ func (a *Arca) findPositionTpslOrders(ctx context.Context, objectID, coin, tpsl 
 	}
 	var out []SimOrder
 	for _, o := range orders {
-		if o.Market == coin && o.Grouping == exGroupingPosTpsl && (tpsl == "" || o.Tpsl == tpsl) {
+		if o.Market == coin && o.SizeToMax && (tpsl == "" || o.Tpsl == tpsl) {
 			out = append(out, o)
 		}
 	}

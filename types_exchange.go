@@ -137,10 +137,11 @@ type SimOrder struct {
 	TriggerPx     *string `json:"triggerPx,omitempty"`
 	IsMarket      bool    `json:"isMarket,omitempty"`
 	Tpsl          string  `json:"tpsl,omitempty"`
-	Grouping      string  `json:"grouping,omitempty"`
-	ParentOrderID string  `json:"parentOrderId,omitempty"`
-	CreatedAt     string  `json:"createdAt"`
-	UpdatedAt     string  `json:"updatedAt"`
+	// SizeToMax is true for an unsized ("size to max") TP/SL that closes the
+	// entire position when fired.
+	SizeToMax bool   `json:"sizeToMax,omitempty"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type OrderListResponse struct {

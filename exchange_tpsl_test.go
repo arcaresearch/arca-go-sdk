@@ -57,7 +57,7 @@ func longBTC() SimPosition {
 	return SimPosition{ID: "pos_1", Market: "hl:0:BTC", Side: Long, Size: "0.5", Leverage: 5}
 }
 
-func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
+func TestSetStopLoss_LongPlacesSellUnsized(t *testing.T) {
 	m := &tpslMockState{positions: []SimPosition{longBTC()}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
@@ -80,14 +80,14 @@ func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
 	if b["tpsl"] != "sl" {
 		t.Errorf("tpsl = %v, want sl", b["tpsl"])
 	}
-	if b["grouping"] != "positionTpsl" {
-		t.Errorf("grouping = %v, want positionTpsl", b["grouping"])
+	if b["sizeToMax"] != true {
+		t.Errorf("sizeToMax = %v, want true", b["sizeToMax"])
 	}
 	if b["reduceOnly"] != true {
 		t.Errorf("reduceOnly = %v, want true", b["reduceOnly"])
 	}
 	if b["size"] != "0" {
-		t.Errorf("size = %v, want \"0\" (venue fills from position)", b["size"])
+		t.Errorf("size = %v, want \"0\" (unsized: closes whole position)", b["size"])
 	}
 	if b["isTrigger"] != true {
 		t.Errorf("isTrigger = %v, want true", b["isTrigger"])
@@ -109,7 +109,7 @@ func TestSetStopLoss_LongPlacesSellPositionTpsl(t *testing.T) {
 	}
 }
 
-func TestSetTakeProfit_ShortPlacesBuyPositionTpsl(t *testing.T) {
+func TestSetTakeProfit_ShortPlacesBuyUnsized(t *testing.T) {
 	m := &tpslMockState{positions: []SimPosition{{ID: "pos_2", Market: "hl:0:ETH", Side: Short, Size: "2", Leverage: 3}}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
@@ -154,7 +154,7 @@ func TestSetStopLoss_ReplaceCancelsExisting(t *testing.T) {
 	m := &tpslMockState{
 		positions: []SimPosition{longBTC()},
 		openTrigger: []SimOrder{
-			{ID: "ord_old_sl", Market: "hl:0:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+			{ID: "ord_old_sl", Market: "hl:0:BTC", Tpsl: "sl", SizeToMax: true, Status: OrderWaitingTrigger},
 		},
 	}
 	srv := newTpslTestServer(m)
@@ -179,7 +179,7 @@ func TestSetStopLoss_NoReplaceSkipsCancel(t *testing.T) {
 	m := &tpslMockState{
 		positions: []SimPosition{longBTC()},
 		openTrigger: []SimOrder{
-			{ID: "ord_old_sl", Market: "hl:0:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+			{ID: "ord_old_sl", Market: "hl:0:BTC", Tpsl: "sl", SizeToMax: true, Status: OrderWaitingTrigger},
 		},
 	}
 	srv := newTpslTestServer(m)
@@ -306,10 +306,10 @@ func TestSetPositionTpsl_RequiresOnePrice(t *testing.T) {
 
 func TestClearPositionTpsl_CancelsBothLegs(t *testing.T) {
 	m := &tpslMockState{openTrigger: []SimOrder{
-		{ID: "ord_sl", Market: "hl:0:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_tp", Market: "hl:0:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_other", Market: "hl:0:BTC", Tpsl: "sl", Grouping: "normalTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_eth", Market: "hl:0:ETH", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_sl", Market: "hl:0:BTC", Tpsl: "sl", SizeToMax: true, Status: OrderWaitingTrigger},
+		{ID: "ord_tp", Market: "hl:0:BTC", Tpsl: "tp", SizeToMax: true, Status: OrderWaitingTrigger},
+		{ID: "ord_other", Market: "hl:0:BTC", Tpsl: "sl", SizeToMax: false, Status: OrderWaitingTrigger},
+		{ID: "ord_eth", Market: "hl:0:ETH", Tpsl: "sl", SizeToMax: true, Status: OrderWaitingTrigger},
 	}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()
@@ -322,7 +322,7 @@ func TestClearPositionTpsl_CancelsBothLegs(t *testing.T) {
 		t.Fatalf("ClearPositionTpsl: %v", err)
 	}
 	if len(cleared) != 2 {
-		t.Fatalf("expected 2 positionTpsl orders for hl:0:BTC, got %d", len(cleared))
+		t.Fatalf("expected 2 unsized orders for hl:0:BTC, got %d", len(cleared))
 	}
 	if len(m.deletes) != 2 {
 		t.Errorf("expected 2 cancels, got %v", m.deletes)
@@ -331,8 +331,8 @@ func TestClearPositionTpsl_CancelsBothLegs(t *testing.T) {
 
 func TestClearPositionTpsl_FilterByLeg(t *testing.T) {
 	m := &tpslMockState{openTrigger: []SimOrder{
-		{ID: "ord_sl", Market: "hl:0:BTC", Tpsl: "sl", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
-		{ID: "ord_tp", Market: "hl:0:BTC", Tpsl: "tp", Grouping: "positionTpsl", Status: OrderWaitingTrigger},
+		{ID: "ord_sl", Market: "hl:0:BTC", Tpsl: "sl", SizeToMax: true, Status: OrderWaitingTrigger},
+		{ID: "ord_tp", Market: "hl:0:BTC", Tpsl: "tp", SizeToMax: true, Status: OrderWaitingTrigger},
 	}}
 	srv := newTpslTestServer(m)
 	defer srv.Close()

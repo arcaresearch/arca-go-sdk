@@ -182,9 +182,14 @@ type PlaceOrderOptions struct {
 	TriggerPx               string
 	IsMarket                *bool
 	Tpsl                    string // "tp" | "sl"
-	Grouping                string // "na" | "normalTpsl" | "positionTpsl"
-	UseMax                  bool
-	SizeTolerance           *float64
+	// SizeToMax marks an unsized ("size to max") TP/SL: it carries no fixed
+	// quantity and, when triggered, closes the entire current position
+	// regardless of size (the trump card). Leave false for a sized TP/SL,
+	// which closes its fixed Size (reduce-only caps it at the live position).
+	// Either way, no TP/SL outlives the position.
+	SizeToMax     bool
+	UseMax        bool
+	SizeTolerance *float64
 }
 
 type ClosePositionOptions struct {
@@ -203,9 +208,9 @@ type ClosePositionOptions struct {
 
 // SetPositionTriggerOptions parameterizes SetStopLoss / SetTakeProfit. The
 // trigger is attached to the open position for Coin: the closing side is
-// inferred (long → sell, short → buy), Grouping is positionTpsl, ReduceOnly is
-// set, and Size is "0" so the venue fills the trigger from — and resizes it
-// with — the live position.
+// inferred (long → sell, short → buy), SizeToMax is set (unsized), and
+// ReduceOnly is set. When the trigger fires it closes the entire live position
+// regardless of size, and it is cancelled when the position closes.
 type SetPositionTriggerOptions struct {
 	Path     string
 	ObjectID string
@@ -218,9 +223,9 @@ type SetPositionTriggerOptions struct {
 	// LimitPrice is the resting limit price used when IsMarket is false. Required
 	// in that case; ignored for market triggers.
 	LimitPrice string
-	// Replace, when nil or true, cancels any existing positionTpsl order of the
-	// same tp/sl type for the coin before placing the new one. Set to a pointer
-	// to false to stack multiple triggers.
+	// Replace, when nil or true, cancels any existing unsized (sizeToMax) order
+	// of the same tp/sl type for the coin before placing the new one. Set to a
+	// pointer to false to stack multiple triggers.
 	Replace *bool
 	// Leverage overrides the position's leverage on the order body.
 	Leverage *int
