@@ -45,6 +45,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 - order.OnFill(ctx, func(SimFill)) func()
 - order.FillSummary(ctx) (*Fill, error)
 - order.Cancel(ctx, path) (*OperationHandle[OrderOperationResponse], error)
+- order.Resize(ctx, newSize, path) (*OperationHandle[OrderOperationResponse], error) // sized orders only; unsized triggers rejected
 
 ## Intent -> method
 
@@ -79,6 +80,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Create exchange | client.EnsurePerpsExchange(ctx, CreatePerpsExchangeOptions{Ref}) |
 | Place order | client.PlaceOrder(ctx, PlaceOrderOptions{...}) |
 | Cancel order | client.CancelOrder(ctx, CancelOrderOptions{...}) |
+| Resize order (sized only) | client.ModifyOrder(ctx, ModifyOrderOptions{...}) — unsized triggers rejected |
 | Close position | client.ClosePosition(ctx, ClosePositionOptions{...}) |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
 | Exchange state | client.GetExchangeState(ctx, id) |

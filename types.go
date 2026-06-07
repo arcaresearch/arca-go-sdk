@@ -260,6 +260,7 @@ const (
 	OpOrder           OperationType = "order"
 	OpFill            OperationType = "fill"
 	OpCancel          OperationType = "cancel"
+	OpModify          OperationType = "modify"
 	OpFeeDistribution OperationType = "fee_distribution"
 	OpAdjustment      OperationType = "adjustment"
 	OpFunding         OperationType = "funding"

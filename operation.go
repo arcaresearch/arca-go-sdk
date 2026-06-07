@@ -125,6 +125,7 @@ type orderHandleDeps struct {
 	getOrder    func(ctx context.Context, objectID, orderID string) (SimOrderWithFills, error)
 	onFillEvent func(handler func(RealmEvent)) func()
 	cancelOrder func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse]
+	modifyOrder func(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse]
 	listFills   func(ctx context.Context, objectID string) (FillListResponse, error)
 }
 
@@ -294,6 +295,28 @@ func (h *OrderHandle) Cancel(ctx context.Context, path string) (*OperationHandle
 		Path:     cancelPath,
 		ObjectID: h.objectID,
 		OrderID:  orderID,
+	}), nil
+}
+
+// Resize changes the order's total size to newSize. Only sized orders can be
+// resized (resting limit orders and sized TP/SL triggers); unsized TP/SL
+// triggers are rejected by the venue. newSize must exceed the already-filled
+// quantity. It auto-generates a per-resize idempotency path from the placement
+// path; pass a non-empty path to control idempotency explicitly.
+func (h *OrderHandle) Resize(ctx context.Context, newSize, path string) (*OperationHandle[OrderOperationResponse], error) {
+	orderID, err := h.resolveOrderID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	modifyPath := path
+	if modifyPath == "" {
+		modifyPath = replaceFirst(h.placementPath, "/op/order/", "/op/modify/") + "-" + newSize
+	}
+	return h.deps.modifyOrder(ctx, ModifyOrderOptions{
+		Path:     modifyPath,
+		ObjectID: h.objectID,
+		OrderID:  orderID,
+		NewSize:  newSize,
 	}), nil
 }
 

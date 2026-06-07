@@ -154,6 +154,9 @@ func (a *Arca) orderHandleDeps() orderHandleDeps {
 		cancelOrder: func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse] {
 			return a.CancelOrder(ctx, opts)
 		},
+		modifyOrder: func(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse] {
+			return a.ModifyOrder(ctx, opts)
+		},
 		listFills: func(ctx context.Context, objectID string) (FillListResponse, error) {
 			return a.ListFills(ctx, objectID, nil)
 		},
@@ -309,6 +312,24 @@ func (a *Arca) CancelOrder(ctx context.Context, opts CancelOrderOptions) *Operat
 		var resp OrderOperationResponse
 		q := url.Values{"realmId": {a.currentRealmID()}, "path": {opts.Path}}
 		err := a.client.delete(ctx, "/objects/"+opts.ObjectID+"/exchange/orders/"+opts.OrderID+"?"+q.Encode(), &resp)
+		return resp, err
+	}, OrderOperationResponse.op, (*OrderOperationResponse).setOp, nil, 0)
+}
+
+// ModifyOrder resizes a resting order to NewSize (the new total size). Only
+// sized orders can be resized: resting limit orders and sized TP/SL triggers.
+// Unsized ("size to max") TP/SL triggers are rejected by the venue because they
+// have no size to amend — they always close the whole position. The operation
+// Path is the idempotency key; distinct resizes need distinct paths.
+func (a *Arca) ModifyOrder(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse] {
+	return op(a, ctx, func() (OrderOperationResponse, error) {
+		var resp OrderOperationResponse
+		body := map[string]any{
+			"realmId": a.currentRealmID(),
+			"path":    opts.Path,
+			"newSize": opts.NewSize,
+		}
+		err := a.client.patch(ctx, "/objects/"+opts.ObjectID+"/exchange/orders/"+opts.OrderID, nil, body, &resp)
 		return resp, err
 	}, OrderOperationResponse.op, (*OrderOperationResponse).setOp, nil, 0)
 }

@@ -278,6 +278,18 @@ type CancelOrderOptions struct {
 	OrderID  string
 }
 
+// ModifyOrderOptions resizes a resting order. Only sized orders can be resized
+// (resting limit orders and sized TP/SL triggers); unsized ("size to max")
+// TP/SL triggers are rejected by the venue. NewSize is the new TOTAL size and
+// must exceed the order's already-filled quantity. Path is a per-resize
+// idempotency key.
+type ModifyOrderOptions struct {
+	Path     string
+	ObjectID string
+	OrderID  string
+	NewSize  string
+}
+
 type UpdateLeverageOptions struct {
 	ObjectID string
 	Market   string
