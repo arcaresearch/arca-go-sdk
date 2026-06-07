@@ -187,7 +187,13 @@ type PlaceOrderOptions struct {
 	// regardless of size (the trump card). Leave false for a sized TP/SL,
 	// which closes its fixed Size (reduce-only caps it at the live position).
 	// Either way, no TP/SL outlives the position.
-	SizeToMax     bool
+	SizeToMax bool
+	// OcoGroupID links this order to the other legs of a TP/SL bracket so a
+	// fill on one leg cancels its siblings (one-cancels-the-other). Advisory
+	// and unsigned — forwarded to the venue but never part of the signed order
+	// digest. Usually left empty for a standalone order; SetPositionTpsl sets
+	// it automatically for its two legs.
+	OcoGroupID    string
 	UseMax        bool
 	SizeTolerance *float64
 }
@@ -237,6 +243,11 @@ type SetPositionTriggerOptions struct {
 	// of a basis point.
 	ApplicationFeeTenthsBps *int
 	FeeTargets              []FeeTarget
+	// OcoGroupID links this trigger to the other legs of a TP/SL bracket so a
+	// fill on one leg cancels its siblings (one-cancels-the-other). Advisory
+	// and unsigned. Normally left empty when calling SetStopLoss/SetTakeProfit
+	// directly; SetPositionTpsl sets it on both legs it places.
+	OcoGroupID string
 }
 
 // SetPositionTpslOptions parameterizes SetPositionTpsl, which attaches a
@@ -254,6 +265,10 @@ type SetPositionTpslOptions struct {
 	// of a basis point.
 	ApplicationFeeTenthsBps *int
 	FeeTargets              []FeeTarget
+	// OcoGroupID overrides the auto-generated bracket id that links the SL and
+	// TP legs as one-cancels-the-other. Leave empty to let SetPositionTpsl mint
+	// a fresh opaque id (the common case); set it only to reuse a known group.
+	OcoGroupID string
 }
 
 // SetPositionTpslResult holds the handles for the legs placed by

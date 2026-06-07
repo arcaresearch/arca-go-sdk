@@ -139,9 +139,19 @@ type SimOrder struct {
 	Tpsl          string  `json:"tpsl,omitempty"`
 	// SizeToMax is true for an unsized ("size to max") TP/SL that closes the
 	// entire position when fired.
-	SizeToMax bool   `json:"sizeToMax,omitempty"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	SizeToMax bool `json:"sizeToMax,omitempty"`
+	// OcoGroupID links the legs of a TP/SL bracket so that when one leg fills
+	// (even partially) the venue cancels the sibling legs sharing this id
+	// (one-cancels-the-other). Empty for a standalone order. SetPositionTpsl
+	// assigns one id to both legs; it is advisory and never part of the signed
+	// order digest.
+	OcoGroupID string `json:"ocoGroupId,omitempty"`
+	// CancelReason explains why a CANCELLED order was cancelled — one of
+	// user_requested, sibling_filled, position_closed, position_flipped,
+	// liquidated, position_gone. Empty unless Status == "CANCELLED".
+	CancelReason string `json:"cancelReason,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
 }
 
 type OrderListResponse struct {

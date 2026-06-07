@@ -82,6 +82,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Cancel order | client.CancelOrder(ctx, CancelOrderOptions{...}) |
 | Resize order (sized only) | client.ModifyOrder(ctx, ModifyOrderOptions{...}) — unsized triggers rejected |
 | Close position | client.ClosePosition(ctx, ClosePositionOptions{...}) |
+| Position TP/SL | client.SetStopLoss / SetTakeProfit / SetPositionTpsl / ClearPositionTpsl |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
 | Exchange state | client.GetExchangeState(ctx, id) |
 | Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage) |
@@ -160,6 +161,10 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 4. FundAccount/DefundAccount are dev-only; use CreatePaymentLink in production.
 5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
 6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage when opening/increasing on PlaceOrder; a ReduceOnly close/trim is accepted without Leverage (uses the position's current leverage, never re-margins). Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
+
+## TP/SL is an OCO bracket; cancelled orders carry a reason
+
+SetPositionTpsl stamps one auto-generated OcoGroupID on both legs; when either fills (even partially) the venue cancels the other and sets CancelReason="sibling_filled". Pass an explicit OcoGroupID (on SetPositionTpslOptions, SetPositionTriggerOptions, or PlaceOrderOptions) to build or reuse your own bracket — it is advisory metadata, forwarded to the venue but NOT part of the order signature. A CANCELLED SimOrder exposes CancelReason (one of user_requested, sibling_filled, position_closed, position_flipped, liquidated, position_gone), readable on-demand via GetOrder / ListOrders. Two placement rules match Hyperliquid: an ALO (post-only) limit that would immediately cross the book is rejected (use GTC/IOC to take liquidity), and a trigger set on the wrong side of the current mark (one that would fire immediately) is rejected.
 
 ## Not yet ported (REST equivalents available)
 

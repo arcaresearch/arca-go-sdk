@@ -293,6 +293,98 @@ func TestSetPositionTpsl_PlacesBothLegs(t *testing.T) {
 	}
 }
 
+// TestSetPositionTpsl_SharesOcoGroupID pins the true one-cancels-the-other
+// linkage: SetPositionTpsl must stamp BOTH legs with the same non-empty
+// ocoGroupId so a fill (even partial) on one leg cancels the sibling. Without a
+// shared id the bracket falls back to position-state reconcile only.
+func TestSetPositionTpsl_SharesOcoGroupID(t *testing.T) {
+	m := &tpslMockState{positions: []SimPosition{longBTC()}}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	if _, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
+		Path: "/op/tpsl/oco", ObjectID: "obj_1", Market: "hl:0:BTC",
+		StopLossPx: "54000", TakeProfitPx: "70000",
+	}); err != nil {
+		t.Fatalf("SetPositionTpsl: %v", err)
+	}
+	if len(m.posts) != 2 {
+		t.Fatalf("expected 2 POSTs, got %d", len(m.posts))
+	}
+	slGroup, _ := m.posts[0]["ocoGroupId"].(string)
+	tpGroup, _ := m.posts[1]["ocoGroupId"].(string)
+	if slGroup == "" {
+		t.Errorf("SL leg missing ocoGroupId: %+v", m.posts[0])
+	}
+	if slGroup != tpGroup {
+		t.Errorf("legs must share one ocoGroupId: sl=%q tp=%q", slGroup, tpGroup)
+	}
+}
+
+// TestSetPositionTpsl_ExplicitOcoGroupID pins that an explicit OcoGroupID
+// overrides the auto-minted one and is applied to both legs verbatim.
+func TestSetPositionTpsl_ExplicitOcoGroupID(t *testing.T) {
+	m := &tpslMockState{positions: []SimPosition{longBTC()}}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	if _, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{
+		Path: "/op/tpsl/oco2", ObjectID: "obj_1", Market: "hl:0:BTC",
+		StopLossPx: "54000", TakeProfitPx: "70000", OcoGroupID: "oco_explicit",
+	}); err != nil {
+		t.Fatalf("SetPositionTpsl: %v", err)
+	}
+	if m.posts[0]["ocoGroupId"] != "oco_explicit" || m.posts[1]["ocoGroupId"] != "oco_explicit" {
+		t.Errorf("explicit group id not applied to both legs: sl=%v tp=%v",
+			m.posts[0]["ocoGroupId"], m.posts[1]["ocoGroupId"])
+	}
+}
+
+// TestPlaceOrder_ForwardsOcoGroupID pins the advisory passthrough on the
+// general order path: an OcoGroupID on PlaceOrderOptions reaches the request
+// body (it is forwarded to the venue but never enters the signed digest).
+func TestPlaceOrder_ForwardsOcoGroupID(t *testing.T) {
+	m := &tpslMockState{}
+	srv := newTpslTestServer(m)
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	h := a.PlaceOrder(context.Background(), PlaceOrderOptions{
+		Path: "/op/place/oco", ObjectID: "obj_1", Market: "hl:0:BTC",
+		Side: Sell, OrderType: "MARKET", Size: "0", OcoGroupID: "oco_grp_99",
+	})
+	if _, err := h.Submitted(context.Background()); err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+	if len(m.posts) != 1 {
+		t.Fatalf("expected 1 POST, got %d", len(m.posts))
+	}
+	if m.posts[0]["ocoGroupId"] != "oco_grp_99" {
+		t.Errorf("ocoGroupId = %v, want oco_grp_99", m.posts[0]["ocoGroupId"])
+	}
+}
+
+// TestSimOrder_DecodesOcoAndCancelReason pins the read-on-demand surface: a
+// CANCELLED order returned by the venue exposes its ocoGroupId and cancelReason
+// through getOrder/listOrders.
+func TestSimOrder_DecodesOcoAndCancelReason(t *testing.T) {
+	var o SimOrder
+	if err := json.Unmarshal([]byte(`{
+		"id":"ord_1","status":"CANCELLED",
+		"ocoGroupId":"oco_abc","cancelReason":"sibling_filled"
+	}`), &o); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if o.OcoGroupID != "oco_abc" {
+		t.Errorf("OcoGroupID = %q, want oco_abc", o.OcoGroupID)
+	}
+	if o.CancelReason != "sibling_filled" {
+		t.Errorf("CancelReason = %q, want sibling_filled", o.CancelReason)
+	}
+}
+
 func TestSetPositionTpsl_RequiresOnePrice(t *testing.T) {
 	a := newTestArca(t, "http://127.0.0.1:0")
 	_, err := a.SetPositionTpsl(context.Background(), SetPositionTpslOptions{

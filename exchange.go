@@ -2,12 +2,27 @@ package arca
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
 	"time"
 )
+
+// generateOcoGroupID mints a fresh opaque id that links the legs of a TP/SL
+// bracket as one-cancels-the-other. The id is advisory and only needs to be
+// unique within a single account's live order set, so a random hex token is
+// sufficient; on the (practically impossible) entropy failure it falls back to
+// a timestamp so the bracket still links its own two legs.
+func generateOcoGroupID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("oco_%d", time.Now().UnixNano())
+	}
+	return "oco_" + hex.EncodeToString(b[:])
+}
 
 // EnsurePerpsExchange creates (or returns) a perpetuals exchange Arca object.
 // The default settlement wait is 60s (exchange creation is slower than transfers).
@@ -255,6 +270,9 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		}
 		if opts.SizeToMax {
 			body["sizeToMax"] = true
+		}
+		if opts.OcoGroupID != "" {
+			body["ocoGroupId"] = opts.OcoGroupID
 		}
 		if opts.UseMax {
 			body["useMax"] = true
@@ -508,6 +526,9 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		if !isMarket {
 			body["price"] = opts.LimitPrice
 		}
+		if opts.OcoGroupID != "" {
+			body["ocoGroupId"] = opts.OcoGroupID
+		}
 		if leverage > 0 {
 			body["leverage"] = leverage
 		}
@@ -546,11 +567,20 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 		return result, &ValidationError{newArcaError("VALIDATION_ERROR",
 			"SetPositionTpsl requires at least one of StopLossPx or TakeProfitPx", "")}
 	}
+	// One opaque group id links both legs as a true one-cancels-the-other
+	// bracket: when either leg fills (even partially), the venue cancels the
+	// sibling with cancelReason=sibling_filled. An explicit OcoGroupID reuses a
+	// known group; otherwise mint a fresh one.
+	ocoGroupID := opts.OcoGroupID
+	if ocoGroupID == "" {
+		ocoGroupID = generateOcoGroupID()
+	}
 	if opts.StopLossPx != "" {
 		sl := a.SetStopLoss(ctx, SetPositionTriggerOptions{
 			Path: opts.Path + "/sl", ObjectID: opts.ObjectID, Market: opts.Market,
 			TriggerPx: opts.StopLossPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
+			OcoGroupID: ocoGroupID,
 		})
 		if _, err := sl.Submitted(ctx); err != nil {
 			return result, err
@@ -562,6 +592,7 @@ func (a *Arca) SetPositionTpsl(ctx context.Context, opts SetPositionTpslOptions)
 			Path: opts.Path + "/tp", ObjectID: opts.ObjectID, Market: opts.Market,
 			TriggerPx: opts.TakeProfitPx, IsMarket: opts.IsMarket, Replace: opts.Replace,
 			ApplicationFeeTenthsBps: opts.ApplicationFeeTenthsBps, FeeTargets: opts.FeeTargets,
+			OcoGroupID: ocoGroupID,
 		})
 		if _, err := tp.Submitted(ctx); err != nil {
 			return result, err
