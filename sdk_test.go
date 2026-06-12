@@ -51,6 +51,8 @@ func TestMapAPIError(t *testing.T) {
 		{"IDEMPOTENCY_VIOLATION", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"ORDER_FAILED", func(e error) bool { var x *ExchangeError; return errors.As(e, &x) }},
 		{"UNAUTHORIZED", func(e error) bool { var x *UnauthorizedError; return errors.As(e, &x) }},
+		{"FORBIDDEN", func(e error) bool { var x *ForbiddenError; return errors.As(e, &x) }},
+		{"REALM_SCOPE_MISMATCH", func(e error) bool { var x *ForbiddenError; return errors.As(e, &x) }},
 	}
 	for _, c := range cases {
 		err := mapAPIError(c.code, "msg", "err_1", nil)
@@ -130,6 +132,97 @@ func TestClient_401RefreshOnce(t *testing.T) {
 		t.Errorf("got %s", obj.ID)
 	}
 	_ = calls
+}
+
+// TestClient_403RefreshOnce pins the stale-identity recovery path: a cached
+// token can be valid (not expired) but scoped to a different identity than
+// the provider would now mint for (e.g. the app switched signed-in users).
+// The server rejects with 403 FORBIDDEN — not 401 — so a 403 must re-invoke
+// the provider and retry once.
+func TestClient_403RefreshOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer fresh-identity-token" {
+			writeError(w, 403, "FORBIDDEN", "Access denied: action is not granted on resource", nil)
+			return
+		}
+		writeEnvelope(w, 200, ArcaObject{ID: "obj_ok"})
+	}))
+	defer srv.Close()
+
+	var refreshed int32
+	a, err := FromTokenProvider(func(ctx context.Context) (string, error) {
+		atomic.AddInt32(&refreshed, 1)
+		return "fresh-identity-token", nil
+	}, Config{Realm: "rlm_01h2xcejqtf2nbrexx3vqjhp41", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("FromTokenProvider: %v", err)
+	}
+	obj, err := a.GetObject(context.Background(), "/x")
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	if obj.ID != "obj_ok" {
+		t.Errorf("got %s", obj.ID)
+	}
+	if atomic.LoadInt32(&refreshed) != 1 {
+		t.Errorf("expected exactly 1 provider refresh, got %d", refreshed)
+	}
+}
+
+// TestClient_403WithoutProvider pins that a plain permission denial (no
+// token provider configured) surfaces as ForbiddenError without firing
+// OnAuthError — it must not look like session expiry.
+func TestClient_403WithoutProvider(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, 403, "FORBIDDEN", "Access denied", nil)
+	}))
+	defer srv.Close()
+
+	a, err := FromToken("header.eyJyZWFsbUlkIjoicmxtXzAxaDJ4Y2VqcXRmMm5icmV4eDN2cWpocDQxIn0.sig",
+		Config{Realm: "rlm_01h2xcejqtf2nbrexx3vqjhp41", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("FromToken: %v", err)
+	}
+	var authErrs int32
+	a.OnAuthError(func(error) { atomic.AddInt32(&authErrs, 1) })
+
+	_, err = a.GetObject(context.Background(), "/x")
+	var fe *ForbiddenError
+	if !errors.As(err, &fe) {
+		t.Fatalf("expected ForbiddenError, got %v", err)
+	}
+	if atomic.LoadInt32(&authErrs) != 0 {
+		t.Errorf("OnAuthError must not fire for a plain 403, fired %d times", authErrs)
+	}
+}
+
+// TestClient_403StillForbiddenAfterRefresh pins that an unrecoverable 403
+// (the provider's freshest token is also rejected) fires OnAuthError so
+// integrators can tear down and rebuild around the new identity.
+func TestClient_403StillForbiddenAfterRefresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, 403, "FORBIDDEN", "Access denied", nil)
+	}))
+	defer srv.Close()
+
+	a, err := FromTokenProvider(func(ctx context.Context) (string, error) {
+		return "still-wrong-identity", nil
+	}, Config{Realm: "rlm_01h2xcejqtf2nbrexx3vqjhp41", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("FromTokenProvider: %v", err)
+	}
+	var authErrs int32
+	a.OnAuthError(func(error) { atomic.AddInt32(&authErrs, 1) })
+
+	_, err = a.GetObject(context.Background(), "/x")
+	var fe *ForbiddenError
+	if !errors.As(err, &fe) {
+		t.Fatalf("expected ForbiddenError, got %v", err)
+	}
+	if atomic.LoadInt32(&authErrs) != 1 {
+		t.Errorf("expected OnAuthError once for unrecoverable 403, got %d", authErrs)
+	}
 }
 
 func TestClient_StepUpRetry(t *testing.T) {

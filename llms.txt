@@ -15,9 +15,15 @@ Import path is `github.com/arcaresearch/arca-go-sdk`; the package name is `arca`
 - Coin ids are canonical `{exchange}:{id}` ("hl:0:BTC", "hl:1:TSLA"), case-sensitive.
 - Market-data timestamps are Unix epoch ms; all others are RFC3339 UTC strings.
 - Errors are typed; use errors.As. Base type: *arca.ArcaError (has Code, Message, ErrorID).
-  Typed: *ValidationError, *UnauthorizedError, *NotFoundError, *ConflictError,
+  Typed: *ValidationError, *UnauthorizedError, *ForbiddenError, *NotFoundError, *ConflictError,
   *InternalError, *ExchangeError, *OperationFailedError, *OperationStalledError,
   *StepUpRequiredError, *StepUpCancelledError.
+- Token-provider clients refresh ~30s before expiry, retry once on 401, and retry once on 403
+  (FORBIDDEN / REALM_SCOPE_MISMATCH — cached token valid but minted for a different identity,
+  e.g. after a signed-in-user switch; a 403-triggered refresh also forces the live WebSocket to
+  reconnect). OnAuthError fires when a 401/403 survives the refresh — tear down and rebuild.
+- An Arca instance is bound to the identity its tokens are minted for: on identity change call
+  Dispose() and build a fresh instance with the new user's provider.
 
 ## Initialization
 

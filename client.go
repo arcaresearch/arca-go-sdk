@@ -31,6 +31,20 @@ const (
 	credToken  credentialType = "token"
 )
 
+// AuthRefreshTrigger tells the refresh callback why the client is asking for
+// a fresh credential.
+type AuthRefreshTrigger string
+
+const (
+	// AuthRefreshUnauthorized — HTTP 401: the credential is invalid or expired.
+	AuthRefreshUnauthorized AuthRefreshTrigger = "unauthorized"
+	// AuthRefreshForbidden — HTTP 403 FORBIDDEN / REALM_SCOPE_MISMATCH: the
+	// credential is still valid but its scope no longer covers the request
+	// (e.g. the app switched signed-in users, so the provider would now mint
+	// a token for a different identity).
+	AuthRefreshForbidden AuthRefreshTrigger = "forbidden"
+)
+
 const (
 	maxRetries        = 2
 	retryBaseDelay    = 250 * time.Millisecond
@@ -61,7 +75,7 @@ type httpClient struct {
 	baseURL    string
 	http       *http.Client
 
-	onUnauthorized func(ctx context.Context) (string, error)
+	onUnauthorized func(ctx context.Context, trigger AuthRefreshTrigger) (string, error)
 	onAuthError    func(error)
 	headerHook     func() map[string]string
 
@@ -75,7 +89,7 @@ type clientConfig struct {
 	credType       credentialType
 	baseURL        string
 	httpClient     *http.Client
-	onUnauthorized func(ctx context.Context) (string, error)
+	onUnauthorized func(ctx context.Context, trigger AuthRefreshTrigger) (string, error)
 	onAuthError    func(error)
 	stepUpHandler  StepUpHandler
 	headerHook     func() map[string]string
@@ -136,16 +150,27 @@ func (c *httpClient) delete(ctx context.Context, path string, out any) error {
 	return c.executeWithAuthRetry(ctx, http.MethodDelete, path, nil, nil, out)
 }
 
-// executeWithAuthRetry wraps requestWithRetry with a single 401 refresh and a
-// single 412 step-up retry. Mirrors the TS client's executeWithAuthRetry.
+// executeWithAuthRetry wraps requestWithRetry with a single auth-refresh
+// retry (on 401, and on 403 FORBIDDEN / REALM_SCOPE_MISMATCH) and a single
+// 412 step-up retry. Mirrors the TS client's executeWithAuthRetry.
+//
+// The 403 branch exists because a cached token can be valid but scoped to a
+// different identity than the provider would now mint for (e.g. the app
+// switched signed-in users) — only a provider round-trip can resolve that.
+// A 403 without a provider is a plain permission denial and does NOT emit
+// onAuthError; only 401s do in that configuration.
 func (c *httpClient) executeWithAuthRetry(ctx context.Context, method, path string, params url.Values, body, out any) error {
 	err := c.requestWithRetry(ctx, method, path, params, body, out)
 	if err == nil {
 		return nil
 	}
 
-	if isUnauthorized(err) && c.onUnauthorized != nil {
-		newCred, refreshErr := c.onUnauthorized(ctx)
+	if isAuthRejection(err) && c.onUnauthorized != nil {
+		trigger := AuthRefreshUnauthorized
+		if isForbidden(err) {
+			trigger = AuthRefreshForbidden
+		}
+		newCred, refreshErr := c.onUnauthorized(ctx, trigger)
 		if refreshErr != nil {
 			if c.onAuthError != nil {
 				c.onAuthError(asUnauthorized(refreshErr))
@@ -153,7 +178,14 @@ func (c *httpClient) executeWithAuthRetry(ctx context.Context, method, path stri
 			return refreshErr
 		}
 		c.updateCredential(newCred)
-		return c.requestWithRetry(ctx, method, path, params, body, out)
+		retryErr := c.requestWithRetry(ctx, method, path, params, body, out)
+		if retryErr != nil && isAuthRejection(retryErr) && c.onAuthError != nil {
+			// The provider's freshest credential was also rejected — an
+			// unrecoverable auth state the integrator must resolve (e.g.
+			// tear down and rebuild around the new identity).
+			c.onAuthError(retryErr)
+		}
+		return retryErr
 	}
 	if isUnauthorized(err) {
 		if c.onAuthError != nil {

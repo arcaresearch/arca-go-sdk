@@ -10,6 +10,15 @@ func isUnauthorized(err error) bool {
 	return errors.As(err, &e)
 }
 
+func isForbidden(err error) bool {
+	var e *ForbiddenError
+	return errors.As(err, &e)
+}
+
+func isAuthRejection(err error) bool {
+	return isUnauthorized(err) || isForbidden(err)
+}
+
 func asUnauthorized(err error) *UnauthorizedError {
 	var e *UnauthorizedError
 	if errors.As(err, &e) {
@@ -64,6 +73,17 @@ type ValidationError struct{ *ArcaError }
 
 // UnauthorizedError is returned when authentication is missing or invalid (HTTP 401).
 type UnauthorizedError struct{ *ArcaError }
+
+// ForbiddenError is returned when the server refuses a request for lack of
+// permission (HTTP 403) — Code is "FORBIDDEN" (action not granted on the
+// resource) or "REALM_SCOPE_MISMATCH" (token locked to a different realm).
+//
+// On a token-provider client a 403 commonly means the cached token is still
+// valid but scoped to a different identity than the one the provider would
+// now mint for (e.g. the app switched signed-in users). The SDK reacts by
+// re-invoking the provider once and retrying; an unrecoverable 403 is
+// surfaced through OnAuthError so integrators can tear down and rebuild.
+type ForbiddenError struct{ *ArcaError }
 
 // NotFoundError is returned when a resource does not exist (HTTP 404).
 type NotFoundError struct{ *ArcaError }
@@ -136,6 +156,7 @@ type StepUpCancelledError struct{ *ArcaError }
 // reaches the base error (Code/Message/ErrorID) from any typed error.
 func (e *ValidationError) Unwrap() error       { return e.ArcaError }
 func (e *UnauthorizedError) Unwrap() error     { return e.ArcaError }
+func (e *ForbiddenError) Unwrap() error        { return e.ArcaError }
 func (e *NotFoundError) Unwrap() error         { return e.ArcaError }
 func (e *ConflictError) Unwrap() error         { return e.ArcaError }
 func (e *InternalError) Unwrap() error         { return e.ArcaError }
@@ -197,6 +218,8 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 		return &ValidationError{base}
 	case "UNAUTHORIZED":
 		return &UnauthorizedError{base}
+	case "FORBIDDEN", "REALM_SCOPE_MISMATCH":
+		return &ForbiddenError{base}
 	case "NOT_FOUND", "USER_NOT_FOUND", "REALM_NOT_FOUND", "OBJECT_NOT_FOUND",
 		"ORG_NOT_FOUND", "ORDER_NOT_FOUND", "ACCOUNT_NOT_FOUND", "MEMBER_NOT_FOUND",
 		"PROFILE_NOT_FOUND", "INVITATION_NOT_FOUND":

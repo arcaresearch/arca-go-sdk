@@ -93,12 +93,27 @@ func New(cfg Config) (*Arca, error) {
 		a.apiKey = cfg.APIKey
 	} else {
 		a.tokenProvider = cfg.TokenProvider
+		var onUnauthorized func(ctx context.Context, trigger AuthRefreshTrigger) (string, error)
+		if a.tokenProvider != nil {
+			onUnauthorized = func(ctx context.Context, trigger AuthRefreshTrigger) (string, error) {
+				tok, err := a.refreshTokenFromProvider(ctx)
+				if err == nil && trigger == AuthRefreshForbidden {
+					// The cached token was valid but its scope no longer
+					// matched the request (e.g. the app switched signed-in
+					// users). A live WebSocket session is still authenticated
+					// under the old identity — force it to re-auth and
+					// re-subscribe with the fresh token.
+					a.ws.Reconnect()
+				}
+				return tok, err
+			}
+		}
 		a.client = newHTTPClient(clientConfig{
 			credential:     cfg.Token,
 			credType:       credToken,
 			baseURL:        apiBase,
 			httpClient:     cfg.HTTPClient,
-			onUnauthorized: a.refreshTokenFromProvider,
+			onUnauthorized: onUnauthorized,
 			onAuthError:    a.emitAuthError,
 			stepUpHandler:  cfg.StepUpHandler,
 		})

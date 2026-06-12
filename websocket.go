@@ -129,6 +129,30 @@ func (m *WebSocketManager) EnsureConnected() {
 	go m.connectLoop(gen)
 }
 
+// Reconnect forces the socket to drop and immediately re-establish. The new
+// connection re-runs auth (fetching a fresh token via getToken when
+// configured) and re-issues every active subscription, so this is the way to
+// move a live session onto a new credential/identity. No-op when the manager
+// is disconnected with no reconnect intent. Mirrors the Swift/Kotlin SDKs'
+// reconnect().
+func (m *WebSocketManager) Reconnect() {
+	m.mu.Lock()
+	if !m.shouldConnect {
+		m.mu.Unlock()
+		return
+	}
+	m.gen++
+	gen := m.gen
+	conn := m.conn
+	m.conn = nil
+	m.connecting = true
+	m.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "credential changed")
+	}
+	go m.connectLoop(gen)
+}
+
 // Disconnect closes the connection and stops reconnecting.
 func (m *WebSocketManager) Disconnect() {
 	m.mu.Lock()
