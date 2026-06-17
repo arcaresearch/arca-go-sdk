@@ -288,11 +288,11 @@ const (
 	CustodyArcaDeleted CustodyExchangeArcaStatus = "deleted"
 )
 
-type CustodyVenueHaltType string
+type CustodyRealmHaltType string
 
 const (
-	HaltWithdrawals CustodyVenueHaltType = "withdrawals"
-	HaltAllFlows    CustodyVenueHaltType = "all_flows"
+	HaltWithdrawals CustodyRealmHaltType = "withdrawals"
+	HaltAllFlows    CustodyRealmHaltType = "all_flows"
 )
 
 type CustodyPendingExit struct {
@@ -321,8 +321,8 @@ type CustodyExchangeArca struct {
 	VaultAddress string                    `json:"vaultAddress"`
 }
 
-type CustodyVenueHalt struct {
-	Type      CustodyVenueHaltType `json:"type"`
+type CustodyRealmHalt struct {
+	Type      CustodyRealmHaltType `json:"type"`
 	ExpiresAt string               `json:"expiresAt"`
 }
 
@@ -332,7 +332,7 @@ type CustodyStatus struct {
 	TotalBalance    string                `json:"totalBalance"`
 	Boundaries      []CustodyBoundary     `json:"boundaries"`
 	ExchangeArcas   []CustodyExchangeArca `json:"exchangeArcas"`
-	VenueHalt       *CustodyVenueHalt     `json:"venueHalt"`
+	RealmHalt       *CustodyRealmHalt     `json:"realmHalt"`
 }
 
 type CustodyBoundaryListResponse struct {
