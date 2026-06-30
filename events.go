@@ -22,6 +22,7 @@ const (
 	EventMidsUpdated          EventType = "mids.updated"
 	EventCandleClosed         EventType = "candle.closed"
 	EventCandleUpdated        EventType = "candle.updated"
+	EventOIUpdated            EventType = "oi.updated"
 	EventTradeExecuted        EventType = "trade.executed"
 	EventTradesBatch          EventType = "trades.batch"
 	EventObjectValuation      EventType = "object.valuation"
@@ -85,6 +86,8 @@ type RealmEvent struct {
 	Market   string         `json:"market,omitempty"`
 	Interval CandleInterval `json:"interval,omitempty"`
 	Candle   *Candle        `json:"candle,omitempty"`
+	Bar      *OIBar         `json:"bar,omitempty"`
+	IsClosed bool           `json:"isClosed,omitempty"`
 	Trade    *MarketTrade   `json:"trade,omitempty"`
 
 	DriftCorrected bool `json:"driftCorrected,omitempty"`

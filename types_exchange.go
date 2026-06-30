@@ -588,6 +588,36 @@ type CandlesResponse struct {
 	Candles  []Candle `json:"candles"`
 }
 
+// OIBar is a single open-interest / 24h-notional bar. The OHLC values track
+// open interest (base-asset units) over the bucket; NtlVlm is the rolling 24h
+// notional volume (USD) at bucket close; Mark is the last mark price in the
+// bucket (USD OI ~= OIClose * Mark). S is the data source ("" self-recorded,
+// "0xa" 0xArchive backfill).
+type OIBar struct {
+	T       int64  `json:"t"`
+	OIOpen  string `json:"oiOpen"`
+	OIHigh  string `json:"oiHigh"`
+	OILow   string `json:"oiLow"`
+	OIClose string `json:"oiClose"`
+	NtlVlm  string `json:"ntlVlm"`
+	Mark    string `json:"mark,omitempty"`
+	S       string `json:"s,omitempty"`
+}
+
+type OIHistoryResponse struct {
+	Market   string  `json:"market"`
+	Interval string  `json:"interval"`
+	Bars     []OIBar `json:"bars"`
+}
+
+// OIEvent is delivered by WatchOI on each live open-interest bar update.
+type OIEvent struct {
+	Market   string         `json:"market"`
+	Interval CandleInterval `json:"interval"`
+	Bar      OIBar          `json:"bar"`
+	IsClosed bool           `json:"isClosed,omitempty"`
+}
+
 type MarketTrade struct {
 	Market string `json:"market"`
 	Px     string `json:"px"`

@@ -210,6 +210,14 @@ type CandleUpdate struct {
 	Candle   Candle
 }
 
+// OIUpdate is delivered by OIWatchStream.
+type OIUpdate struct {
+	Market   string
+	Interval CandleInterval
+	Bar      OIBar
+	IsClosed bool
+}
+
 // ---- Concrete streams ----
 
 // PriceWatchStream streams mid prices. Read Get/Prices any time after Ready.
@@ -563,6 +571,37 @@ func (a *Arca) WatchCandles(ctx context.Context, coins []string, intervals []Can
 	})
 	s.addUnsub(unsub)
 	s.addUnsub(func() { a.ws.releaseCandles(coins, intervals) })
+	return s, nil
+}
+
+// OIWatchStream streams open-interest + 24h-notional bar updates.
+type OIWatchStream struct {
+	*WatchStream[OIUpdate]
+	coins     []string
+	intervals []CandleInterval
+}
+
+// WatchOI streams live open-interest bars for the given coins and intervals.
+// Tier 3 ambient: open interest moves slowly and the stream is self-correcting
+// (no gap recovery), so the practical intervals are the fine-grained 1m/5m
+// buckets — coarser history (1h/1d) is served by GetOIHistory. When intervals
+// is empty it defaults to ["1m", "5m"].
+func (a *Arca) WatchOI(ctx context.Context, coins []string, intervals []CandleInterval) (*OIWatchStream, error) {
+	if err := a.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	if len(intervals) == 0 {
+		intervals = []CandleInterval{Interval1m, Interval5m}
+	}
+	s := &OIWatchStream{WatchStream: newWatchStream[OIUpdate](), coins: coins, intervals: intervals}
+	a.ws.acquireOI(coins, intervals)
+	unsub := a.ws.OnOIUpdated(func(ev RealmEvent) {
+		if ev.Bar != nil {
+			s.emit(OIUpdate{Market: ev.Market, Interval: ev.Interval, Bar: *ev.Bar, IsClosed: ev.IsClosed})
+		}
+	})
+	s.addUnsub(unsub)
+	s.addUnsub(func() { a.ws.releaseOI(coins, intervals) })
 	return s, nil
 }
 

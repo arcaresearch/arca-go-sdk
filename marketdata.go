@@ -281,6 +281,50 @@ func (a *Arca) GetCandles(ctx context.Context, coin string, interval CandleInter
 	return out, nil
 }
 
+// GetOIHistoryOptions are optional bounds for GetOIHistory.
+type GetOIHistoryOptions struct {
+	StartTime *int64
+	EndTime   *int64
+}
+
+// GetOIHistory returns open-interest + 24h-notional-volume history for a
+// market. Each bar tracks open interest (OHLC over the bucket, base-asset
+// units) plus the rolling 24h notional volume (NtlVlm, USD) and last mark
+// price (Mark) at bucket close; USD OI ~= OIClose * Mark. coin must be a
+// canonical market id (e.g. "hl:0:BTC"). Deep history (~1 year) is seeded from
+// a one-time 0xArchive backfill (S == "0xa").
+func (a *Arca) GetOIHistory(ctx context.Context, coin string, interval CandleInterval, opts *GetOIHistoryOptions) (OIHistoryResponse, error) {
+	var out OIHistoryResponse
+	keyParams := map[string]string{"coin": coin, "interval": string(interval)}
+	if opts != nil && opts.StartTime != nil {
+		keyParams["startTime"] = strconv.FormatInt(*opts.StartTime, 10)
+	}
+	if opts != nil && opts.EndTime != nil {
+		keyParams["endTime"] = strconv.FormatInt(*opts.EndTime, 10)
+	}
+	key := buildCacheKey("oiHistory", keyParams)
+	if cached, ok := a.cache.get(key); ok {
+		return cached.(OIHistoryResponse), nil
+	}
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	params := url.Values{"interval": {string(interval)}}
+	if opts != nil && opts.StartTime != nil {
+		params.Set("startTime", strconv.FormatInt(*opts.StartTime, 10))
+	}
+	if opts != nil && opts.EndTime != nil {
+		params.Set("endTime", strconv.FormatInt(*opts.EndTime, 10))
+	}
+	if err := a.client.get(ctx, "/exchange/market/oi/"+coin, params, &out); err != nil {
+		return out, err
+	}
+	if len(out.Bars) > 0 {
+		a.cache.set(key, out)
+	}
+	return out, nil
+}
+
 // GetSparklines returns 24 hourly close prices for all tracked coins.
 func (a *Arca) GetSparklines(ctx context.Context) (SparklinesResponse, error) {
 	var out SparklinesResponse

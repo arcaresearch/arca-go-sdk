@@ -65,6 +65,7 @@ type WebSocketManager struct {
 	midsCoins  map[string]int
 	midsExch   string
 	candleRefs map[string]map[CandleInterval]bool
+	oiRefs     map[string]map[CandleInterval]bool
 	tradeRefs  map[string]int
 
 	chartWatches map[string]chartWatchReq
@@ -96,6 +97,7 @@ func newWebSocketManager(cfg wsConfig) *WebSocketManager {
 		midsCoins:    map[string]int{},
 		midsExch:     "sim",
 		candleRefs:   map[string]map[CandleInterval]bool{},
+		oiRefs:       map[string]map[CandleInterval]bool{},
 		tradeRefs:    map[string]int{},
 		chartWatches: map[string]chartWatchReq{},
 		pending:      map[string]pendingRequest{},
@@ -378,6 +380,20 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 			}
 		}
 		return
+	case "oi.updated":
+		if head.DeliverySeq != nil {
+			m.checkGap(*head.DeliverySeq)
+		}
+		var msg struct {
+			Market   string         `json:"market"`
+			Interval CandleInterval `json:"interval"`
+			OI       *OIBar         `json:"oi"`
+			IsClosed bool           `json:"isClosed"`
+		}
+		if json.Unmarshal(data, &msg) == nil && msg.OI != nil {
+			m.dispatch(RealmEvent{Type: EventOIUpdated, Market: msg.Market, Interval: msg.Interval, Bar: msg.OI, IsClosed: msg.IsClosed})
+		}
+		return
 	case "trades.batch":
 		if head.DeliverySeq != nil {
 			m.checkGap(*head.DeliverySeq)
@@ -419,6 +435,14 @@ func (m *WebSocketManager) onAuthenticated() {
 			candleIntervals[iv] = true
 		}
 	}
+	var oiCoins []string
+	oiIntervals := map[CandleInterval]bool{}
+	for c, ivs := range m.oiRefs {
+		oiCoins = append(oiCoins, c)
+		for iv := range ivs {
+			oiIntervals[iv] = true
+		}
+	}
 	var tradeCoins []string
 	for c := range m.tradeRefs {
 		tradeCoins = append(tradeCoins, c)
@@ -447,6 +471,13 @@ func (m *WebSocketManager) onAuthenticated() {
 				ivs = append(ivs, iv)
 			}
 			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_candles", "coins": candleCoins, "intervals": ivs, "batch": true})
+		}
+		if len(oiCoins) > 0 {
+			ivs := make([]CandleInterval, 0, len(oiIntervals))
+			for iv := range oiIntervals {
+				ivs = append(ivs, iv)
+			}
+			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_oi", "coins": oiCoins, "intervals": ivs})
 		}
 		if len(tradeCoins) > 0 {
 			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_trades", "coins": tradeCoins})
@@ -830,6 +861,60 @@ func (m *WebSocketManager) syncCandles() {
 	m.send(map[string]any{"action": "subscribe_candles", "coins": coins, "intervals": ivs, "batch": true})
 }
 
+func (m *WebSocketManager) acquireOI(coins []string, intervals []CandleInterval) {
+	m.mu.Lock()
+	for _, c := range coins {
+		if m.oiRefs[c] == nil {
+			m.oiRefs[c] = map[CandleInterval]bool{}
+		}
+		for _, iv := range intervals {
+			m.oiRefs[c][iv] = true
+		}
+	}
+	m.mu.Unlock()
+	m.EnsureConnected()
+	m.syncOI()
+}
+
+func (m *WebSocketManager) releaseOI(coins []string, intervals []CandleInterval) {
+	m.mu.Lock()
+	for _, c := range coins {
+		if ivs := m.oiRefs[c]; ivs != nil {
+			for _, iv := range intervals {
+				delete(ivs, iv)
+			}
+			if len(ivs) == 0 {
+				delete(m.oiRefs, c)
+			}
+		}
+	}
+	m.mu.Unlock()
+	m.syncOI()
+}
+
+func (m *WebSocketManager) syncOI() {
+	m.mu.Lock()
+	if len(m.oiRefs) == 0 {
+		m.mu.Unlock()
+		m.send(map[string]any{"action": "unsubscribe_oi"})
+		return
+	}
+	var coins []string
+	ivSet := map[CandleInterval]bool{}
+	for c, ivs := range m.oiRefs {
+		coins = append(coins, c)
+		for iv := range ivs {
+			ivSet[iv] = true
+		}
+	}
+	m.mu.Unlock()
+	ivs := make([]CandleInterval, 0, len(ivSet))
+	for iv := range ivSet {
+		ivs = append(ivs, iv)
+	}
+	m.send(map[string]any{"action": "subscribe_oi", "coins": coins, "intervals": ivs})
+}
+
 func (m *WebSocketManager) acquireTrades(coins []string) {
 	m.mu.Lock()
 	for _, c := range coins {
@@ -1008,6 +1093,10 @@ func (m *WebSocketManager) OnMidsUpdated(cb func(map[string]string)) func() {
 
 func (m *WebSocketManager) OnCandleUpdated(cb func(RealmEvent)) func() {
 	return m.On(EventCandleUpdated, cb)
+}
+
+func (m *WebSocketManager) OnOIUpdated(cb func(RealmEvent)) func() {
+	return m.On(EventOIUpdated, cb)
 }
 
 func (m *WebSocketManager) OnTradeExecuted(cb func(MarketTrade)) func() {

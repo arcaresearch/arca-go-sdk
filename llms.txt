@@ -105,6 +105,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Market meta | client.GetMarketMeta(ctx) / Market(ctx, id) / ResolveMarkets(ctx, symbol, *opts) / ResolveMarket(ctx, symbol, *opts) / PreloadMarketMeta(ctx) |
 | Mids/tickers/book | client.GetMarketMids / GetMarketTickers / GetOrderBook |
 | Candles | client.GetCandles(ctx, coin, interval, *GetCandlesOptions) |
+| OI history | client.GetOIHistory(ctx, market, interval, *GetOIHistoryOptions) — OHLC open interest + 24h ntlVlm + mark; intervals 1m/5m/1h/1d |
 | Sparklines | client.GetSparklines(ctx) |
 | Custody status | client.GetCustodyStatus(ctx) |
 | Boundaries | client.GetBoundary / ListBoundaries / ListExchangeArcas |
@@ -131,6 +132,7 @@ State(), OnStateChange, Close().
 | client.WatchFills(ctx, id, opts) | Fill |
 | client.WatchFunding(ctx, id) | FundingPayment |
 | client.WatchCandles(ctx, coins, intervals) | CandleUpdate |
+| client.WatchOI(ctx, coins, intervals) | OIUpdate |
 | client.WatchTrades(ctx, coins) | MarketTrade |
 | client.WatchTwap(ctx, exchangeId, opId) | Twap |
 
