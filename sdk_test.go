@@ -49,6 +49,8 @@ func TestMapAPIError(t *testing.T) {
 		{"NOT_FOUND", func(e error) bool { var x *NotFoundError; return errors.As(e, &x) }},
 		{"OBJECT_NOT_FOUND", func(e error) bool { var x *NotFoundError; return errors.As(e, &x) }},
 		{"IDEMPOTENCY_VIOLATION", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		{"NO_LIQUIDITY", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		{"MARKET_DELISTED", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"ORDER_FAILED", func(e error) bool { var x *ExchangeError; return errors.As(e, &x) }},
 		{"UNAUTHORIZED", func(e error) bool { var x *UnauthorizedError; return errors.As(e, &x) }},
 		{"FORBIDDEN", func(e error) bool { var x *ForbiddenError; return errors.As(e, &x) }},

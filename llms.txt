@@ -18,6 +18,9 @@ Import path is `github.com/arcaresearch/arca-go-sdk`; the package name is `arca`
   Typed: *ValidationError, *UnauthorizedError, *ForbiddenError, *NotFoundError, *ConflictError,
   *InternalError, *ExchangeError, *OperationFailedError, *OperationStalledError,
   *StepUpRequiredError, *StepUpCancelledError.
+- Order rejections: a well-formed order the venue can't fill is a *ConflictError (409) whose Code is
+  NO_LIQUIDITY (empty book, retry) or MARKET_DELISTED (market delisted, positions settled by the venue);
+  *ExchangeError (502) is reserved for genuine upstream/internal failures. Branch on Code, not HTTP status.
 - Token-provider clients refresh ~30s before expiry, retry once on 401, and retry once on 403
   (FORBIDDEN / REALM_SCOPE_MISMATCH — cached token valid but minted for a different identity,
   e.g. after a signed-in-user switch; a 403-triggered refresh also forces the live WebSocket to

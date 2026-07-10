@@ -88,8 +88,12 @@ type ForbiddenError struct{ *ArcaError }
 // NotFoundError is returned when a resource does not exist (HTTP 404).
 type NotFoundError struct{ *ArcaError }
 
-// ConflictError is returned on an idempotency conflict — same path, different
-// inputs (HTTP 409).
+// ConflictError is returned on a 409 conflict — a well-formed request the
+// current server/venue state can't satisfy. Covers idempotency conflicts
+// (same path, different inputs) and order-placement conflicts, where Code
+// carries the specific reason: "NO_LIQUIDITY" (empty book side, retry or use a
+// marketable limit) or "MARKET_DELISTED" (market delisted, open positions were
+// settled by the venue, no new orders accepted).
 type ConflictError struct{ *ArcaError }
 
 // InternalError is returned when the server hits an unexpected error (HTTP 500).
@@ -225,7 +229,12 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 		"PROFILE_NOT_FOUND", "INVITATION_NOT_FOUND":
 		return &NotFoundError{base}
 	case "CONFLICT", "ALREADY_EXISTS", "ALREADY_MEMBER", "ALREADY_DELETED",
-		"DUPLICATE_REALM", "ALREADY_REVOKED", "IDEMPOTENCY_VIOLATION":
+		"DUPLICATE_REALM", "ALREADY_REVOKED", "IDEMPOTENCY_VIOLATION",
+		// Order-placement conflicts (409): the request is well-formed but the
+		// venue state can't fill it. NO_LIQUIDITY = empty book side right now
+		// (retry / marketable limit); MARKET_DELISTED = market gone, positions
+		// were settled by the venue. The specific code stays on base.Code.
+		"NO_LIQUIDITY", "MARKET_DELISTED":
 		return &ConflictError{base}
 	case "INTERNAL_ERROR":
 		return &InternalError{base}
