@@ -58,7 +58,6 @@ type Organization struct {
 	CreatedBy                       string `json:"createdBy"`
 	CreatedAt                       string `json:"createdAt"`
 	UpdatedAt                       string `json:"updatedAt"`
-	KybStatus                       string `json:"kybStatus,omitempty"`
 	BuilderAgreementVersionAccepted *int   `json:"builderAgreementVersionAccepted,omitempty"`
 }
 
