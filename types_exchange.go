@@ -464,6 +464,53 @@ type OrderLimits struct {
 	MinOrderNotionalUsd float64 `json:"minOrderNotionalUsd"`
 }
 
+// MinOrderSizeOptions is the input to (*Arca).MinOrderSize. Provide either a
+// resolved Market (no fetch) or a MarketID (looked up via Market()).
+type MinOrderSizeOptions struct {
+	// Market, when non-nil, is used directly without a metadata fetch.
+	Market *Market
+	// MarketID is the canonical id (e.g. "hl:0:BTC"), used when Market is nil.
+	MarketID string
+	// Price is the reference price for the notional→size conversion (mark price
+	// for market orders, limit price for limit orders), as a decimal string.
+	Price string
+	// ReduceOnly orders are exempt from the minimum so dust positions can be closed.
+	ReduceOnly bool
+	// IsTrigger marks stop / take-profit trigger orders.
+	IsTrigger bool
+	// SizeToMax marks unsized trigger orders, which are exempt from the minimum.
+	SizeToMax bool
+}
+
+// MinOrderSizeResult is the output of (*Arca).MinOrderSize.
+type MinOrderSizeResult struct {
+	// MinSize is the minimum order size in base-asset units (decimal string),
+	// rounded up to the market's szDecimals precision. For exempt orders it is
+	// a single size tick (10^-szDecimals).
+	MinSize string `json:"minSize"`
+	// MinNotionalUsd is the USD notional floor applied. Zero for exempt orders.
+	MinNotionalUsd float64 `json:"minNotionalUsd"`
+}
+
+// ValidateOrderSizeOptions is the input to (*Arca).ValidateOrderSize.
+type ValidateOrderSizeOptions struct {
+	Market     *Market
+	MarketID   string
+	Price      string
+	Size       string
+	ReduceOnly bool
+	IsTrigger  bool
+	SizeToMax  bool
+}
+
+// OrderSizeValidation is the output of (*Arca).ValidateOrderSize.
+type OrderSizeValidation struct {
+	OK             bool    `json:"ok"`
+	Reason         string  `json:"reason,omitempty"`
+	MinSize        string  `json:"minSize"`
+	MinNotionalUsd float64 `json:"minNotionalUsd"`
+}
+
 // ---- Market data ----
 
 type CandleInterval string
@@ -513,6 +560,13 @@ type Market struct {
 	Index               int          `json:"index"`
 	SzDecimals          int          `json:"szDecimals"`
 	MaxLeverage         int          `json:"maxLeverage"`
+	// MinOrderNotionalUsd is the minimum order notional in USD (size*price)
+	// for this market. Use MinOrderSize to convert it into a minimum order
+	// size in base-asset units, or ValidateOrderSize to check a size before
+	// PlaceOrder. Reduce-only orders and unsized (SizeToMax) triggers are
+	// exempt. May be zero when served by an older backend; clients fall back
+	// to the venue-wide GetOrderLimits default.
+	MinOrderNotionalUsd float64 `json:"minOrderNotionalUsd,omitempty"`
 	// OnlyIsolated is Hyperliquid-specific and deprecated in favor of
 	// MarginModes. OnlyIsolated==true is equivalent to MarginModes
 	// being ["isolated"]. Independent of HIP-3 — some HIP-3 markets

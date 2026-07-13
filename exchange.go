@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -914,6 +916,115 @@ func (a *Arca) TradeSummary(ctx context.Context, objectID string, opts *TradeSum
 // notional). Static; no network call.
 func (a *Arca) GetOrderLimits() OrderLimits {
 	return OrderLimits{MinOrderNotionalUsd: 10}
+}
+
+// MinOrderSize computes the minimum valid order size for a market at a given
+// price. The venue enforces a minimum order notional (size*price); this
+// converts that into a minimum size in base-asset units, rounded up to the
+// market's szDecimals precision so it always clears the floor. Reduce-only
+// orders and unsized (SizeToMax) trigger orders are exempt — any positive size
+// down to one tick is allowed. When opts.Market is nil, opts.MarketID is
+// fetched (and cached) via Market(); when the market has no
+// MinOrderNotionalUsd (older server), the venue-wide GetOrderLimits default is
+// used.
+func (a *Arca) MinOrderSize(ctx context.Context, opts MinOrderSizeOptions) (MinOrderSizeResult, error) {
+	market := opts.Market
+	if market == nil && opts.MarketID != "" {
+		m, err := a.Market(ctx, opts.MarketID)
+		if err != nil {
+			return MinOrderSizeResult{}, err
+		}
+		market = m
+	}
+
+	szDecimals := 5
+	minNotional := a.GetOrderLimits().MinOrderNotionalUsd
+	if market != nil {
+		szDecimals = market.SzDecimals
+		if market.MinOrderNotionalUsd > 0 {
+			minNotional = market.MinOrderNotionalUsd
+		}
+	}
+	factor := math.Pow(10, float64(szDecimals))
+	tick := 1 / factor
+
+	if opts.ReduceOnly || (opts.IsTrigger && opts.SizeToMax) {
+		return MinOrderSizeResult{MinSize: formatSizeToDecimals(tick, szDecimals), MinNotionalUsd: 0}, nil
+	}
+
+	price, err := strconv.ParseFloat(opts.Price, 64)
+	if err != nil || price <= 0 {
+		// Can't convert notional → size without a valid price; return one tick
+		// so the caller at least enforces the precision floor.
+		return MinOrderSizeResult{MinSize: formatSizeToDecimals(tick, szDecimals), MinNotionalUsd: minNotional}, nil
+	}
+
+	// Round up to szDecimals precision. Subtract a tiny epsilon on the scaled
+	// value so floating-point noise on an exact boundary (e.g. 10 / 100000)
+	// doesn't overshoot by a full tick.
+	minSizeNum := math.Ceil(minNotional/price*factor-1e-6) / factor
+	if minSizeNum < tick {
+		minSizeNum = tick
+	}
+	return MinOrderSizeResult{MinSize: formatSizeToDecimals(minSizeNum, szDecimals), MinNotionalUsd: minNotional}, nil
+}
+
+// ValidateOrderSize validates an order size against the market's minimum before
+// PlaceOrder. Advisory only — the server (sim-exchange and Hyperliquid) remains
+// the authoritative enforcement point; use this to gate a UI and show a
+// consistent message.
+func (a *Arca) ValidateOrderSize(ctx context.Context, opts ValidateOrderSizeOptions) (OrderSizeValidation, error) {
+	min, err := a.MinOrderSize(ctx, MinOrderSizeOptions{
+		Market:     opts.Market,
+		MarketID:   opts.MarketID,
+		Price:      opts.Price,
+		ReduceOnly: opts.ReduceOnly,
+		IsTrigger:  opts.IsTrigger,
+		SizeToMax:  opts.SizeToMax,
+	})
+	if err != nil {
+		return OrderSizeValidation{}, err
+	}
+
+	size, perr := strconv.ParseFloat(opts.Size, 64)
+	if perr != nil || size <= 0 {
+		return OrderSizeValidation{OK: false, Reason: "Order size must be a positive number.", MinSize: min.MinSize, MinNotionalUsd: min.MinNotionalUsd}, nil
+	}
+
+	// Exempt orders (reduce-only / unsized trigger) only need a positive size.
+	if opts.ReduceOnly || (opts.IsTrigger && opts.SizeToMax) {
+		return OrderSizeValidation{OK: true, MinSize: min.MinSize, MinNotionalUsd: min.MinNotionalUsd}, nil
+	}
+
+	minSizeNum, _ := strconv.ParseFloat(min.MinSize, 64)
+	if size < minSizeNum {
+		price, _ := strconv.ParseFloat(opts.Price, 64)
+		notional := size * price
+		return OrderSizeValidation{
+			OK:             false,
+			Reason:         fmt.Sprintf("Order notional $%.2f is below venue minimum of $%v. Minimum size is %s.", notional, min.MinNotionalUsd, min.MinSize),
+			MinSize:        min.MinSize,
+			MinNotionalUsd: min.MinNotionalUsd,
+		}, nil
+	}
+
+	return OrderSizeValidation{OK: true, MinSize: min.MinSize, MinNotionalUsd: min.MinNotionalUsd}, nil
+}
+
+// formatSizeToDecimals formats a size to at most `decimals` fractional digits,
+// stripping trailing zeros, for use as a canonical decimal string
+// (e.g. "0.0001", "3.34", "10").
+func formatSizeToDecimals(n float64, decimals int) string {
+	if decimals <= 0 {
+		return strconv.FormatInt(int64(math.Round(n)), 10)
+	}
+	s := strconv.FormatFloat(n, 'f', decimals, 64)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "" {
+		return "0"
+	}
+	return s
 }
 
 func defaultStr(v, def string) string {

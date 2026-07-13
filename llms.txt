@@ -102,6 +102,8 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Set margin mode (cross/iso) | client.SetMarginMode(ctx, SetMarginModeOptions{...}) |
 | Order breakdown (pure) | arca.ComputeOrderBreakdown(OrderBreakdownOptions{...}) |
 | Order limits | client.GetOrderLimits() |
+| Min order size (UI gating) | client.MinOrderSize(ctx, MinOrderSizeOptions{Market|MarketID, Price, ReduceOnly?, IsTrigger?, SizeToMax?}) -> {MinSize, MinNotionalUsd} (ceil to szDecimals; reduce-only / unsized-trigger exempt) |
+| Validate order size (advisory) | client.ValidateOrderSize(ctx, ValidateOrderSizeOptions{..., Size}) -> {OK, Reason, MinSize, MinNotionalUsd} |
 | Trade summary | client.TradeSummary(ctx, id, *TradeSummaryOptions) |
 | TWAP | client.PlaceTwap / CancelTwap / GetTwap / ListTwaps |
 | TWAP limits | client.GetTwapLimits(ctx) / RecommendedIntervalSeconds(ctx, mins) |
