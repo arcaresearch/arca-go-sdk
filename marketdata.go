@@ -325,6 +325,54 @@ func (a *Arca) GetOIHistory(ctx context.Context, coin string, interval CandleInt
 	return out, nil
 }
 
+// GetFundingHistoryOptions are optional bounds for GetFundingHistory.
+type GetFundingHistoryOptions struct {
+	StartTime *int64
+	EndTime   *int64
+}
+
+// GetFundingHistory returns market-wide SETTLED funding-rate history for a
+// market. Each observation carries the settlement time (T, Unix ms), the
+// settled FundingRate, and the Premium, in chronological order. This is
+// distinct from the account-scoped funding payments streamed by WatchFunding;
+// these are the market-wide rates that drive those payments. market must be a
+// canonical market id (e.g. "hl:0:BTC", "hl:1:TSLA"); HIP-3 markets are
+// supported where history exists. Funding is an event series, so there is no
+// interval. The default window is the trailing 7 days; the documented maximum
+// window is 30 days. Values are settled rates, never predicted — read the
+// ticker's Funding + NextFundingTime for the current/predicted rate.
+func (a *Arca) GetFundingHistory(ctx context.Context, market string, opts *GetFundingHistoryOptions) (FundingHistoryResponse, error) {
+	var out FundingHistoryResponse
+	keyParams := map[string]string{"market": market}
+	if opts != nil && opts.StartTime != nil {
+		keyParams["startTime"] = strconv.FormatInt(*opts.StartTime, 10)
+	}
+	if opts != nil && opts.EndTime != nil {
+		keyParams["endTime"] = strconv.FormatInt(*opts.EndTime, 10)
+	}
+	key := buildCacheKey("fundingHistory", keyParams)
+	if cached, ok := a.cache.get(key); ok {
+		return cached.(FundingHistoryResponse), nil
+	}
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	params := url.Values{}
+	if opts != nil && opts.StartTime != nil {
+		params.Set("startTime", strconv.FormatInt(*opts.StartTime, 10))
+	}
+	if opts != nil && opts.EndTime != nil {
+		params.Set("endTime", strconv.FormatInt(*opts.EndTime, 10))
+	}
+	if err := a.client.get(ctx, "/exchange/market/funding/"+market, params, &out); err != nil {
+		return out, err
+	}
+	if len(out.Funding) > 0 {
+		a.cache.set(key, out)
+	}
+	return out, nil
+}
+
 // GetSparklines returns 24 hourly close prices for all tracked coins.
 func (a *Arca) GetSparklines(ctx context.Context) (SparklinesResponse, error) {
 	var out SparklinesResponse

@@ -654,3 +654,88 @@ func TestSimPosition_DecodesIsolatedFields(t *testing.T) {
 		t.Errorf("LeverageSetting.MarginMode = %q", ls.MarginMode)
 	}
 }
+
+func TestGetFundingHistory_RequestAndDecode(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		writeEnvelope(w, 200, FundingHistoryResponse{
+			Market: "hl:0:BTC",
+			Funding: []FundingObservation{
+				{T: 1700000000000, FundingRate: "0.0000125", Premium: "0.00008", S: "hl"},
+				{T: 1700003600000, FundingRate: "0.0000130", Premium: "0.00009", S: "hl"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	defer a.Dispose()
+
+	start := int64(1700000000000)
+	end := int64(1700604800000)
+	res, err := a.GetFundingHistory(context.Background(), "hl:0:BTC", &GetFundingHistoryOptions{StartTime: &start, EndTime: &end})
+	if err != nil {
+		t.Fatalf("GetFundingHistory: %v", err)
+	}
+	if gotPath != "/api/v1/exchange/market/funding/hl:0:BTC" {
+		t.Errorf("path = %s", gotPath)
+	}
+	if !strings.Contains(gotQuery, "startTime=1700000000000") || !strings.Contains(gotQuery, "endTime=1700604800000") {
+		t.Errorf("query = %s", gotQuery)
+	}
+	if res.Market != "hl:0:BTC" {
+		t.Errorf("market = %q", res.Market)
+	}
+	if len(res.Funding) != 2 {
+		t.Fatalf("expected 2 observations, got %d", len(res.Funding))
+	}
+	if res.Funding[0].T != 1700000000000 || res.Funding[0].FundingRate != "0.0000125" ||
+		res.Funding[0].Premium != "0.00008" || res.Funding[0].S != "hl" {
+		t.Errorf("observation not decoded: %+v", res.Funding[0])
+	}
+}
+
+func TestGetFundingHistory_EmptyNotCached(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n == 1 {
+			// First call: empty history — must NOT be cached.
+			writeEnvelope(w, 200, FundingHistoryResponse{Market: "hl:0:BTC", Funding: []FundingObservation{}})
+			return
+		}
+		writeEnvelope(w, 200, FundingHistoryResponse{
+			Market:  "hl:0:BTC",
+			Funding: []FundingObservation{{T: 1700000000000, FundingRate: "0.0001", S: "hl"}},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	defer a.Dispose()
+
+	start := int64(1700000000000)
+	end := int64(1700604800000)
+	opts := &GetFundingHistoryOptions{StartTime: &start, EndTime: &end}
+
+	first, err := a.GetFundingHistory(context.Background(), "hl:0:BTC", opts)
+	if err != nil {
+		t.Fatalf("first GetFundingHistory: %v", err)
+	}
+	if len(first.Funding) != 0 {
+		t.Fatalf("expected empty first result, got %d", len(first.Funding))
+	}
+	// Same params — empty must have been re-fetched, not served from cache.
+	second, err := a.GetFundingHistory(context.Background(), "hl:0:BTC", opts)
+	if err != nil {
+		t.Fatalf("second GetFundingHistory: %v", err)
+	}
+	if len(second.Funding) != 1 {
+		t.Fatalf("expected 1 observation on refetch, got %d", len(second.Funding))
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("expected 2 HTTP calls (empty not cached), got %d", calls)
+	}
+}

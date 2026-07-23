@@ -664,6 +664,24 @@ type OIHistoryResponse struct {
 	Bars     []OIBar `json:"bars"`
 }
 
+// FundingObservation is a single SETTLED funding-rate observation for a market.
+// Unlike OIBar / Candle it is not interval-bucketed — it is a raw event at the
+// venue's real settlement timestamp (T, Unix ms), so a market's true funding
+// schedule is preserved. FundingRate/Premium are settled historical rates,
+// never predicted (use the ticker's Funding + NextFundingTime for the
+// current/predicted rate). S is the data source ("hl").
+type FundingObservation struct {
+	T           int64  `json:"t"`
+	FundingRate string `json:"fundingRate"`
+	Premium     string `json:"premium,omitempty"`
+	S           string `json:"s,omitempty"`
+}
+
+type FundingHistoryResponse struct {
+	Market  string               `json:"market"`
+	Funding []FundingObservation `json:"funding"`
+}
+
 // OIEvent is delivered by WatchOI on each live open-interest bar update.
 type OIEvent struct {
 	Market   string         `json:"market"`
