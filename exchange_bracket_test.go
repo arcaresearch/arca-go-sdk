@@ -106,14 +106,22 @@ func TestOpenWithBracket_OneCallThreeHandles(t *testing.T) {
 		}
 		return nil
 	}
+	// normalTpsl children are FIXED-SIZE: they default to the entry's size and
+	// never carry sizeToMax (that is the whole-position positionTpsl model).
 	tp := findLeg("tp")
-	if tp == nil || tp["side"] != "sell" || tp["reduceOnly"] != true || tp["sizeToMax"] != true ||
+	if tp == nil || tp["side"] != "sell" || tp["reduceOnly"] != true || tp["size"] != "0.01" ||
 		tp["isTrigger"] != true || tp["triggerPx"] != "72000" {
 		t.Errorf("tp leg wrong: %+v", tp)
 	}
+	if _, ok := tp["sizeToMax"]; ok {
+		t.Errorf("normalTpsl child must NOT carry sizeToMax: %+v", tp)
+	}
 	sl := findLeg("sl")
-	if sl == nil || sl["side"] != "sell" || sl["triggerPx"] != "58000" {
+	if sl == nil || sl["side"] != "sell" || sl["triggerPx"] != "58000" || sl["size"] != "0.01" {
 		t.Errorf("sl leg wrong: %+v", sl)
+	}
+	if _, ok := sl["sizeToMax"]; ok {
+		t.Errorf("normalTpsl child must NOT carry sizeToMax: %+v", sl)
 	}
 
 	// Three handles, each resolving to its own leg's orderId.
@@ -158,11 +166,12 @@ func TestOpenWithBracket_OnlyStopLoss(t *testing.T) {
 	}
 }
 
-// TestOpenWithBracket_SizedTakeProfit pins the sized-partial-leg contract: a
-// non-empty TakeProfitSz makes the TP leg a sized reduce-only close (carries
-// its base-unit Size, NO sizeToMax), while a leg with no size stays unsized
-// (size "0" + sizeToMax true). This is what enables "scale out half" through
-// the typed bracket surface.
+// TestOpenWithBracket_SizedTakeProfit pins the child-sizing contract: an
+// explicit TakeProfitSz makes the TP leg a sized partial reduce-only close
+// (carries its base-unit Size, NO sizeToMax), while a child with no explicit
+// size defaults to the entry's fixed size (a normalTpsl child is a fixed-size
+// leg of the parent order — never sizeToMax). This is what enables "scale out
+// half" through the typed bracket surface.
 func TestOpenWithBracket_SizedTakeProfit(t *testing.T) {
 	m := &bracketMockState{}
 	srv := newBracketTestServer(m)
@@ -173,7 +182,7 @@ func TestOpenWithBracket_SizedTakeProfit(t *testing.T) {
 		Path: "/op/bracket/sized", ObjectID: "obj_1", Market: "hl:0:BTC",
 		Side: Buy, Size: "0.02",
 		TakeProfitPx: "72000", TakeProfitSz: "0.01", // sized: scale out half
-		StopLossPx: "58000", // unsized: protect the whole position
+		StopLossPx: "58000", // default: protect the whole (entry-sized) position
 	})
 	if err != nil {
 		t.Fatalf("OpenWithBracket: %v", err)
@@ -199,8 +208,11 @@ func TestOpenWithBracket_SizedTakeProfit(t *testing.T) {
 		t.Errorf("sized TP reduceOnly = %v, want true", tp["reduceOnly"])
 	}
 	sl := findLeg("sl")
-	if sl["size"] != "0" || sl["sizeToMax"] != true {
-		t.Errorf("unsized SL wrong: size=%v sizeToMax=%v", sl["size"], sl["sizeToMax"])
+	if sl["size"] != "0.02" { // defaults to the entry's fixed size
+		t.Errorf("default SL size = %v, want 0.02 (entry size)", sl["size"])
+	}
+	if _, ok := sl["sizeToMax"]; ok {
+		t.Errorf("default SL must NOT carry sizeToMax, got %+v", sl)
 	}
 }
 

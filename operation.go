@@ -164,6 +164,42 @@ func (h *OrderHandle) resolveOrderID(ctx context.Context) (string, error) {
 	return resp.Operation.ID, nil
 }
 
+// resolveCloid returns the order's client id from the placement outcome. A
+// normalTpsl bracket child is not a live venue order until the entry fills and
+// the venue arms it — until then it has NO venue order id and is addressable
+// only by its cloid. resolveOrderID falls back to the operation id (never a
+// real venue oid) for such a child, so fill matching must also key on the
+// cloid. Returns "" when the outcome carries no cloid (e.g. sim orders).
+func (h *OrderHandle) resolveCloid(ctx context.Context) string {
+	resp, err := h.Submitted(ctx)
+	if err != nil {
+		return ""
+	}
+	if resp.Operation.Outcome != nil && *resp.Operation.Outcome != "" {
+		var parsed struct {
+			Cloid string `json:"cloid"`
+		}
+		if json.Unmarshal([]byte(*resp.Operation.Outcome), &parsed) == nil {
+			return parsed.Cloid
+		}
+	}
+	return ""
+}
+
+// fillMatches reports whether a fill belongs to this order. It matches on the
+// venue order id when the order is live, OR on the cloid — the latter is the
+// only handle a still-pending bracket child has before the venue assigns it an
+// oid.
+func fillMatches(f *SimFill, orderID, cloid string) bool {
+	if f.OrderID != "" && f.OrderID == orderID {
+		return true
+	}
+	if cloid != "" && f.Cloid != "" && f.Cloid == cloid {
+		return true
+	}
+	return false
+}
+
 func isTerminalOrderStatus(s OrderStatus) bool {
 	return s == OrderFilled || s == OrderCancelled || s == OrderFailed
 }
@@ -224,7 +260,7 @@ func (h *OrderHandle) Filled(ctx context.Context) (SimOrderWithFills, error) {
 // OnFill registers a callback for each fill on this order. It returns an
 // unsubscribe function.
 func (h *OrderHandle) OnFill(ctx context.Context, callback func(SimFill)) func() {
-	var orderID string
+	var orderID, cloid string
 	var once sync.Once
 	active := true
 	var mu sync.Mutex
@@ -233,17 +269,21 @@ func (h *OrderHandle) OnFill(ctx context.Context, callback func(SimFill)) func()
 			return
 		}
 		once.Do(func() {
-			if id, err := h.resolveOrderID(ctx); err == nil {
-				mu.Lock()
+			id, err := h.resolveOrderID(ctx)
+			cl := h.resolveCloid(ctx)
+			mu.Lock()
+			if err == nil {
 				orderID = id
-				mu.Unlock()
 			}
+			cloid = cl
+			mu.Unlock()
 		})
 		mu.Lock()
 		oid := orderID
+		cl := cloid
 		a := active
 		mu.Unlock()
-		if a && ev.Fill.OrderID == oid {
+		if a && fillMatches(ev.Fill, oid, cl) {
 			callback(*ev.Fill)
 		}
 	})
@@ -273,6 +313,9 @@ func (h *OrderHandle) FillSummary(ctx context.Context) (*Fill, error) {
 	}
 	for i := range fills.Fills {
 		f := &fills.Fills[i]
+		// A bracket child's fills carry the placement operation id, so the
+		// OperationID match already correlates a still-pending child correctly
+		// (the platform Fill record has no cloid to key on).
 		if f.OperationID == opID || f.OrderID == result.Order.ID {
 			return f, nil
 		}
