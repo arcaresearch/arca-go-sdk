@@ -113,7 +113,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | OI history | client.GetOIHistory(ctx, market, interval, *GetOIHistoryOptions) — OHLC open interest + 24h ntlVlm + mark; intervals 1m/5m/1h/1d |
 | Funding history | client.GetFundingHistory(ctx, market, *GetFundingHistoryOptions) — SETTLED funding observations {T, FundingRate, Premium, S}; no interval (event series); default 7d, max 30d; HIP-3 supported; not predicted (use ticker Funding/NextFundingTime) |
 | Sparklines | client.GetSparklines(ctx) |
-| Custody status | client.GetCustodyStatus(ctx) |
+| Custody status | client.GetCustodyStatus(ctx) — `.Implementations` carries each custody proxy's resolved impl address + version marker (`Kernel`/`Coordinator`/`HLModule`/`SimModule`/`Vault`/`VaultBeacon`); gate compatibility on `moduleVersion` / `exchangeArcaVaultVersion` (surface markers), not on the stable proxy address. `Version` is nil when the marker read failed |
 | Boundaries | client.GetBoundary / ListBoundaries / ListExchangeArcas |
 | Register recovery key | client.RegisterRecoveryKey(ctx, RegisterRecoveryKeyOptions{...}) |
 | Generate recovery key | arca.GenerateRecoveryKey() |

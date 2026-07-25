@@ -325,6 +325,46 @@ type CustodyRealmHalt struct {
 	ExpiresAt string               `json:"expiresAt"`
 }
 
+// CustodyImplRef is a resolved custody implementation address and the version
+// marker read off it.
+//
+// A proxy address is stable across upgrades and says nothing about the surface it
+// currently delegates to, so both halves are needed: the address identifies which
+// implementation, the marker identifies what surface.
+type CustodyImplRef struct {
+	// Address is the implementation address, resolved live from the chain.
+	Address string `json:"address"`
+	// Version is the version marker read off that implementation, or nil when the
+	// read failed. Never 0 for an unread marker — a client gating on version >= 5
+	// must be able to tell "reports 4" from "could not read".
+	Version *uint64 `json:"version"`
+	// Marker names the getter Version came from. moduleVersion and
+	// exchangeArcaVaultVersion promise surface semantics (they bump on meaningful
+	// public-surface changes, so gate feature checks on them); arcaKernelVersion
+	// and arcaCoordinatorVersion promise storage layout and will not move for a
+	// surface addition.
+	Marker string `json:"marker"`
+}
+
+// CustodyImplementations is the implementation set behind a realm's custody
+// proxies. Assert compatibility against this before moving money, rather than
+// scanning runtime bytecode.
+//
+// Entries are omitted when the address cannot be resolved (a degraded RPC, or a
+// realm that predates the proxy), so treat a missing entry as "unknown", not as
+// "absent from the deployment".
+type CustodyImplementations struct {
+	Kernel      *CustodyImplRef `json:"kernel,omitempty"`
+	Coordinator *CustodyImplRef `json:"coordinator,omitempty"`
+	HLModule    *CustodyImplRef `json:"hlModule,omitempty"`
+	SimModule   *CustodyImplRef `json:"simModule,omitempty"`
+	// Vault is resolved through the live chain path (module.vaultBeacon() →
+	// beacon.implementation()), so it reflects the vault implementation the module
+	// actually governs.
+	Vault       *CustodyImplRef `json:"vault,omitempty"`
+	VaultBeacon string          `json:"vaultBeacon,omitempty"`
+}
+
 type CustodyStatus struct {
 	ContractAddress string                `json:"contractAddress"`
 	ChainID         int64                 `json:"chainId"`
@@ -332,6 +372,8 @@ type CustodyStatus struct {
 	Boundaries      []CustodyBoundary     `json:"boundaries"`
 	ExchangeArcas   []CustodyExchangeArca `json:"exchangeArcas"`
 	RealmHalt       *CustodyRealmHalt     `json:"realmHalt"`
+	// Implementations is nil when no implementation could be resolved.
+	Implementations *CustodyImplementations `json:"implementations,omitempty"`
 }
 
 type CustodyBoundaryListResponse struct {
