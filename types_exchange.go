@@ -148,7 +148,14 @@ type SimOrder struct {
 	OcoGroupID string `json:"ocoGroupId,omitempty"`
 	// CancelReason explains why a CANCELLED order was cancelled — one of
 	// user_requested, sibling_filled, position_closed, position_flipped,
-	// liquidated, position_gone. Empty unless Status == "CANCELLED".
+	// liquidated, position_gone, market_delisted, insufficient_margin.
+	// Empty unless Status == "CANCELLED".
+	//
+	// insufficient_margin means a resting limit order kept reaching its price
+	// while the account could not afford the fill: placement checks margin but
+	// does not reserve it, so an order can become unaffordable while it rests.
+	// A brief dip is tolerated — the venue only retires the order after it
+	// stays unaffordable across repeated attempts over several minutes.
 	CancelReason string `json:"cancelReason,omitempty"`
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
