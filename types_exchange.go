@@ -106,8 +106,16 @@ type SimPosition struct {
 	CumulativePlatformFee *string `json:"cumulativePlatformFee,omitempty"`
 	CumulativeBuilderFee  *string `json:"cumulativeBuilderFee,omitempty"`
 	Error                 *string `json:"error,omitempty"`
-	CreatedAt             string  `json:"createdAt"`
-	UpdatedAt             string  `json:"updatedAt"`
+	// CreatedAt is when the position's current open lot began — the same lot
+	// boundary the Cumulative* fields use. It survives increases, partial
+	// reduces, and leverage / margin-mode changes; it resets on a
+	// flip-through-zero and on a reopen after a full close.
+	//
+	// Derived from the platform's own fill history rather than reported by the
+	// venue, so it means the same thing on every exchange. Empty when no
+	// history exists to derive it from.
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type PositionListResponse struct {
