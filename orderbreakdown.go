@@ -248,15 +248,31 @@ func ComputeOrderBreakdown(opts OrderBreakdownOptions) OrderBreakdown {
 				equityPost := equity - estimatedFee
 				marginAvail := equityPost - (otherMM + mmMerged)
 				if marginAvail > 0 {
-					perUnit := marginAvail / merged.size
-					var liq float64
-					if merged.side == Long {
-						liq = price - perUnit
-					} else {
-						liq = price + perUnit
+					// As the mark moves, equity falls at `size` per unit while
+					// this position's own maintenance requirement falls at
+					// `mmr * size` (MM = mmr * size * mark), so the gap closes
+					// at only `size * (1 -/+ mmr)` per unit. Omitting that term
+					// reads optimistic for shorts. Mirrors `crossMarginLiqPrice`
+					// in sim-exchange's account.go.
+					mmrEff := 0.0
+					if mergedNotional > 0 {
+						mmrEff = mmMerged / mergedNotional
 					}
-					if liq > 0 {
-						result.EstimatedLiquidationPrice = fmtNum(liq, 8)
+					sensitivity := 1 + mmrEff
+					if merged.side == Long {
+						sensitivity = 1 - mmrEff
+					}
+					if sensitivity > 0 {
+						perUnit := marginAvail / (merged.size * sensitivity)
+						var liq float64
+						if merged.side == Long {
+							liq = price - perUnit
+						} else {
+							liq = price + perUnit
+						}
+						if liq > 0 {
+							result.EstimatedLiquidationPrice = fmtNum(liq, 8)
+						}
 					}
 				}
 			}
