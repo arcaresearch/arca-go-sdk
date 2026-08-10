@@ -95,7 +95,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Open with atomic bracket | client.OpenWithBracket(ctx, OpenBracketOptions{...}) → OpenBracketResult{Entry, TakeProfit?, StopLoss?} |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
 | Exchange state | client.GetExchangeState(ctx, id) |
-| Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage) |
+| Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage); MaxBuySize/MaxSellSize include reversing and split as MaxBuyReduceSize + MaxBuyOpenSize (same for sell) — the reduce leg is never refused for balance, the open leg is what buying power gates. Empty on Hyperliquid. |
 | Asset fees | client.GetAssetFees(ctx, id, applicationFeeTenthsBps) |
 | Set leverage | client.UpdateLeverage(ctx, UpdateLeverageOptions{...}) |
 | Add/remove isolated margin | client.UpdateIsolatedMargin(ctx, UpdateIsolatedMarginOptions{...}) |

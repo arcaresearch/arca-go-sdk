@@ -353,8 +353,28 @@ type ActiveAssetData struct {
 	MaxSellSize           string       `json:"maxSellSize"`
 	MaxBuyUsd             string       `json:"maxBuyUsd"`
 	MaxSellUsd            string       `json:"maxSellUsd"`
-	AvailableToTrade      string       `json:"availableToTrade"`
-	MarkPx                string       `json:"markPx"`
+	// MaxBuyReduceSize / MaxBuyOpenSize (and the sell pair) break MaxBuySize /
+	// MaxSellSize into the part that reduces the open position and the part
+	// that opens new exposure: MaxBuySize == MaxBuyReduceSize + MaxBuyOpenSize.
+	//
+	// The reduce leg is the open position's size when this side closes it, and
+	// "0" otherwise. It is always available — a strictly-reducing order lowers
+	// both the initial and the maintenance requirement, so it is never refused
+	// for balance. Only the open leg is constrained by collateral.
+	//
+	// Empty on venues that do not report the split (Hyperliquid). Treat empty
+	// as "unknown", not as "0".
+	MaxBuyReduceSize  string `json:"maxBuyReduceSize,omitempty"`
+	MaxBuyOpenSize    string `json:"maxBuyOpenSize,omitempty"`
+	MaxSellReduceSize string `json:"maxSellReduceSize,omitempty"`
+	MaxSellOpenSize   string `json:"maxSellOpenSize,omitempty"`
+	// AvailableToTrade is cross equity minus cross *initial* margin. Not the
+	// same as the exchange state's Withdrawable, which is cross equity minus
+	// cross *maintenance* margin — maintenance is the lower requirement, so
+	// Withdrawable is normally larger and this value can go negative while the
+	// account is still solvent.
+	AvailableToTrade string `json:"availableToTrade"`
+	MarkPx           string `json:"markPx"`
 	FeeRate               string       `json:"feeRate"`
 	MaintenanceMarginRate string       `json:"maintenanceMarginRate"`
 	MarginTiers           []MarginTier `json:"marginTiers,omitempty"`
