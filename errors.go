@@ -90,18 +90,30 @@ type NotFoundError struct{ *ArcaError }
 
 // ConflictError is returned on a 409 conflict — a well-formed request the
 // current server/venue state can't satisfy. Covers idempotency conflicts
-// (same path, different inputs) and order-placement conflicts, where Code
-// carries the specific reason: "NO_LIQUIDITY" (empty book side, retry or use a
-// marketable limit) or "MARKET_DELISTED" (market delisted, open positions were
-// settled by the venue, no new orders accepted).
+// (same path, different inputs) and venue refusals, where Code carries the
+// specific reason:
+//
+//   - "NO_LIQUIDITY" — empty book side; retry or use a marketable limit
+//   - "MARKET_DELISTED" — market delisted, open positions were settled by the
+//     venue, no new orders accepted
+//   - "MARKET_NOT_TRADABLE" — market exists but is halted or not yet live
+//   - "MARKET_NOT_USDC_COLLATERAL" — position-opening order on a market whose
+//     collateral is not USDC
+//   - "ORDER_FAILED" — the venue refused the order for a reason with no
+//     narrower code; Message carries its verbatim text
+//
+// None of these are retryable as-is: the venue evaluated the request and said
+// no, so the same request gets the same answer.
 type ConflictError struct{ *ArcaError }
 
 // InternalError is returned when the server hits an unexpected error (HTTP 500).
 type InternalError struct{ *ArcaError }
 
-// ExchangeError is returned when an upstream exchange service rejects the
-// operation. Covers user-facing exchange errors (ORDER_FAILED) and
-// infrastructure failures (EXCHANGE_UNAVAILABLE).
+// ExchangeError is returned when the request could not be delivered to, or a
+// usable answer read from, the upstream exchange (HTTP 502) — a connection
+// reset, a timeout, an unparseable response. It is a transport fault, not a
+// verdict, so retrying is reasonable. A refusal *by* the venue is a
+// ConflictError or ValidationError carrying the venue's own reason.
 type ExchangeError struct{ *ArcaError }
 
 // OperationSnapshot is the minimal operation view carried on operation errors.
@@ -230,15 +242,18 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 		return &NotFoundError{base}
 	case "CONFLICT", "ALREADY_EXISTS", "ALREADY_MEMBER", "ALREADY_DELETED",
 		"DUPLICATE_REALM", "ALREADY_REVOKED", "IDEMPOTENCY_VIOLATION",
-		// Order-placement conflicts (409): the request is well-formed but the
-		// venue state can't fill it. NO_LIQUIDITY = empty book side right now
+		// Order-placement conflicts (409): the venue evaluated a well-formed
+		// request and refused it. NO_LIQUIDITY = empty book side right now
 		// (retry / marketable limit); MARKET_DELISTED = market gone, positions
-		// were settled by the venue. The specific code stays on base.Code.
-		"NO_LIQUIDITY", "MARKET_DELISTED":
+		// were settled by the venue; MARKET_NOT_TRADABLE = halted or not yet
+		// live; ORDER_FAILED = a refusal with no narrower code, verbatim venue
+		// text in Message. The specific code stays on base.Code.
+		"NO_LIQUIDITY", "MARKET_DELISTED", "MARKET_NOT_TRADABLE",
+		"MARKET_NOT_USDC_COLLATERAL", "ORDER_FAILED":
 		return &ConflictError{base}
 	case "INTERNAL_ERROR":
 		return &InternalError{base}
-	case "EXCHANGE_ERROR", "EXCHANGE_UNAVAILABLE", "ORDER_FAILED", "INVALID_REQUEST":
+	case "EXCHANGE_ERROR", "EXCHANGE_UNAVAILABLE", "INVALID_REQUEST":
 		return &ExchangeError{base}
 	case "STEP_UP_REQUIRED":
 		if challenge := parseStepUpChallenge(details); challenge != nil {

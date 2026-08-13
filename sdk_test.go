@@ -51,7 +51,13 @@ func TestMapAPIError(t *testing.T) {
 		{"IDEMPOTENCY_VIOLATION", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"NO_LIQUIDITY", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"MARKET_DELISTED", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
-		{"ORDER_FAILED", func(e error) bool { var x *ExchangeError; return errors.As(e, &x) }},
+		{"MARKET_NOT_TRADABLE", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		{"MARKET_NOT_USDC_COLLATERAL", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		// Every server path returns ORDER_FAILED as a 409 venue refusal, so it
+		// must NOT be an ExchangeError — that class means "transport fault,
+		// retry", which is how a partner hammered an impossible order.
+		{"ORDER_FAILED", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		{"EXCHANGE_ERROR", func(e error) bool { var x *ExchangeError; return errors.As(e, &x) }},
 		{"UNAUTHORIZED", func(e error) bool { var x *UnauthorizedError; return errors.As(e, &x) }},
 		{"FORBIDDEN", func(e error) bool { var x *ForbiddenError; return errors.As(e, &x) }},
 		{"REALM_SCOPE_MISMATCH", func(e error) bool { var x *ForbiddenError; return errors.As(e, &x) }},
