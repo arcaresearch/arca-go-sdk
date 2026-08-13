@@ -99,6 +99,10 @@ type NotFoundError struct{ *ArcaError }
 //   - "MARKET_NOT_TRADABLE" — market exists but is halted or not yet live
 //   - "MARKET_NOT_USDC_COLLATERAL" — position-opening order on a market whose
 //     collateral is not USDC
+//   - "VENUE_RATE_LIMITED" — the account exhausted its request allowance at the
+//     venue. On Hyperliquid that allowance is earned by cumulative volume
+//     traded, not elapsed time, so waiting does not restore it and each retry
+//     spends budget the account has not earned; Message carries the remedy
 //   - "ORDER_FAILED" — the venue refused the order for a reason with no
 //     narrower code; Message carries its verbatim text
 //
@@ -246,10 +250,12 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 		// request and refused it. NO_LIQUIDITY = empty book side right now
 		// (retry / marketable limit); MARKET_DELISTED = market gone, positions
 		// were settled by the venue; MARKET_NOT_TRADABLE = halted or not yet
-		// live; ORDER_FAILED = a refusal with no narrower code, verbatim venue
+		// live; VENUE_RATE_LIMITED = the account's venue request allowance is
+		// spent (volume-earned on HL, so waiting does not help);
+		// ORDER_FAILED = a refusal with no narrower code, verbatim venue
 		// text in Message. The specific code stays on base.Code.
 		"NO_LIQUIDITY", "MARKET_DELISTED", "MARKET_NOT_TRADABLE",
-		"MARKET_NOT_USDC_COLLATERAL", "ORDER_FAILED":
+		"MARKET_NOT_USDC_COLLATERAL", "VENUE_RATE_LIMITED", "ORDER_FAILED":
 		return &ConflictError{base}
 	case "INTERNAL_ERROR":
 		return &InternalError{base}

@@ -53,6 +53,9 @@ func TestMapAPIError(t *testing.T) {
 		{"MARKET_DELISTED", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"MARKET_NOT_TRADABLE", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		{"MARKET_NOT_USDC_COLLATERAL", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
+		// HL's request allowance is earned by volume traded, so a retry loop
+		// makes it strictly worse. Must never be the retryable ExchangeError.
+		{"VENUE_RATE_LIMITED", func(e error) bool { var x *ConflictError; return errors.As(e, &x) }},
 		// Every server path returns ORDER_FAILED as a 409 venue refusal, so it
 		// must NOT be an ExchangeError — that class means "transport fault,
 		// retry", which is how a partner hammered an impossible order.

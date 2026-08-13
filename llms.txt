@@ -20,7 +20,10 @@ Import path is `github.com/arcaresearch/arca-go-sdk`; the package name is `arca`
   *StepUpRequiredError, *StepUpCancelledError.
 - Order rejections: a venue refusal is a *ConflictError (409) whose Code is NO_LIQUIDITY (empty book —
   retry or use a marketable limit), MARKET_DELISTED (positions settled by the venue),
-  MARKET_NOT_TRADABLE (halted or not yet live), MARKET_NOT_USDC_COLLATERAL, or ORDER_FAILED (refusal
+  MARKET_NOT_TRADABLE (halted or not yet live), MARKET_NOT_USDC_COLLATERAL, VENUE_RATE_LIMITED (the
+  account's venue request allowance is spent — on Hyperliquid it is earned by cumulative volume traded,
+  not by elapsed time, so waiting does not restore it and each retry spends budget the account has not
+  earned), or ORDER_FAILED (refusal
   with no narrower code; the venue's verbatim reason is in Message). None are retryable as-is — change
   the request. A bad-input refusal (tick size, price band, leverage cap, min notional, insufficient
   margin) is a *ValidationError (400) carrying the same verbatim reason. *ExchangeError (502) means the
