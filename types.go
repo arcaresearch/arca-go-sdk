@@ -178,6 +178,11 @@ type IsolationZone struct {
 	CreatedAt  string         `json:"createdAt"`
 	UpdatedAt  string         `json:"updatedAt"`
 	Isolation  *IsolationInfo `json:"isolation,omitempty"`
+	// RecoveryKey is set only when a key was requested at creation AND seated
+	// in the same transaction. Empty means the boundary is still keyless and
+	// needs RegisterRecoveryKey — which is also the answer for every zone
+	// created without asking for one.
+	RecoveryKey string `json:"recoveryKey,omitempty"`
 }
 
 type EnsureArcaObjectResponse struct {

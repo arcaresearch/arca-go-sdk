@@ -1043,6 +1043,18 @@ func (m *WebSocketManager) OnBalanceUpdated(cb func(entityID string, ev RealmEve
 	})
 }
 
+// OnDepositDetected fires when money is seen arriving at a watched deposit
+// address. The funds are not credited yet — OnBalanceUpdated is what says
+// that — so treat this as "money is on its way", which is exactly what a
+// user staring at an unchanged balance needs to be told.
+func (m *WebSocketManager) OnDepositDetected(cb func(deposit *DetectedDeposit, ev RealmEvent)) func() {
+	return m.On(EventDepositDetected, func(ev RealmEvent) {
+		if ev.Deposit != nil {
+			cb(ev.Deposit, ev)
+		}
+	})
+}
+
 func (m *WebSocketManager) OnAggregationUpdated(cb func(watchID string, agg *PathAggregation, ev RealmEvent)) func() {
 	return m.On(EventAggregationUpdated, func(ev RealmEvent) {
 		if ev.EntityID != "" {

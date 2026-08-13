@@ -110,6 +110,16 @@ type BrowseObjectsOptions struct {
 
 type CreateIsolationZoneOptions struct {
 	Path string
+	// RecoveryKey, when set, is seated on the new zone's boundary as part of
+	// creating it, rather than in a separate RegisterRecoveryKey call. That
+	// saves an on-chain round trip, which matters when someone is waiting on
+	// the result — seating the key is what arms co-sign, so the boundary is
+	// not fully usable until it happens either way.
+	//
+	// Check the returned zone's RecoveryKey to see whether it was actually
+	// seated: realms whose coordinator predates the combined entrypoint create
+	// the boundary keyless and still need RegisterRecoveryKey.
+	RecoveryKey string
 }
 
 type ListOperationsOptions struct {

@@ -192,7 +192,11 @@ func (a *Arca) CreateIsolationZone(ctx context.Context, opts CreateIsolationZone
 	if path == "/" {
 		return out, &ValidationError{newArcaError("VALIDATION_ERROR", "Isolation zones must be created at a non-root path.", "")}
 	}
-	err = a.client.post(ctx, "/isolation-zones", map[string]any{"realmId": rid, "path": path}, &out)
+	body := map[string]any{"realmId": rid, "path": path}
+	if opts.RecoveryKey != "" {
+		body["recoveryKey"] = opts.RecoveryKey
+	}
+	err = a.client.post(ctx, "/isolation-zones", body, &out)
 	return out, err
 }
 

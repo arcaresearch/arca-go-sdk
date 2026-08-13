@@ -11,7 +11,12 @@ const (
 	EventObjectUpdated    EventType = "object.updated"
 	EventObjectDeleted    EventType = "object.deleted"
 	EventBalanceUpdated   EventType = "balance.updated"
-	EventExchangeUpdated  EventType = "exchange.updated"
+	// EventDepositDetected is money seen arriving at a watched deposit
+	// address, before it has been swept into the boundary and become
+	// balance. It is the honest early signal for "funds are on their way";
+	// EventBalanceUpdated is still what says they landed.
+	EventDepositDetected EventType = "deposit.detected"
+	EventExchangeUpdated EventType = "exchange.updated"
 	// EventFillPreviewed is Phase 1 of two-phase fill delivery: the instant,
 	// incomplete venue-level fill echo. EventFillRecorded (Phase 2) follows with
 	// the authoritative record; the SDK merges the pair by correlationId.
@@ -76,6 +81,8 @@ type RealmEvent struct {
 	HeldOutbound []ReservedBalance `json:"heldOutbound,omitempty"`
 	HeldInbound  []ReservedBalance `json:"heldInbound,omitempty"`
 
+	Deposit *DetectedDeposit `json:"deposit,omitempty"`
+
 	Path    string `json:"path,omitempty"`
 	WatchID string `json:"watchId,omitempty"`
 
@@ -108,4 +115,20 @@ type RealmEvent struct {
 	Sequence      int64  `json:"sequence,omitempty"`
 	Timestamp     string `json:"timestamp,omitempty"`
 	DeliverySeq   int64  `json:"deliverySeq,omitempty"`
+}
+
+// DetectedDeposit is money observed arriving at a watched deposit address.
+//
+// It is chain truth, not ledger truth: nothing here has been credited yet.
+// Amount is the transfer's value in whole units, and Sweeping says whether
+// the platform is already moving it into the boundary without further
+// action from the user.
+type DetectedDeposit struct {
+	Address    string `json:"address,omitempty"`
+	From       string `json:"from,omitempty"`
+	Amount     string `json:"amount,omitempty"`
+	TxHash     string `json:"txHash,omitempty"`
+	Block      uint64 `json:"block,omitempty"`
+	BoundaryID string `json:"boundaryId,omitempty"`
+	Sweeping   bool   `json:"sweeping,omitempty"`
 }
