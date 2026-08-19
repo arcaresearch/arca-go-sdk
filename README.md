@@ -151,6 +151,12 @@ Available: `WatchPrices`, `WatchOperations`, `WatchBalances`, `WatchObject`,
 `WatchObjects`, `WatchAggregation`, `WatchExchangeState`, `WatchFills`,
 `WatchFunding`, `WatchCandles`, `WatchTrades`, `WatchTwap`.
 
+The connection is rotated before the infrastructure's maximum socket lifetime
+severs it: a replacement is warmed alongside the live one and only takes over
+once the server confirms its subscriptions are live, so delivery never pauses
+and no reconnect is surfaced. Set `Config.ConnectionLifetime` to override the
+50-minute default, or to a pointer to `0` to disable rotation.
+
 ## Trading
 
 ```go

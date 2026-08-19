@@ -349,11 +349,20 @@ func (a *Arca) WatchBalances(ctx context.Context, path string) (*BalanceWatchStr
 // sources.
 type AggregationWatchStream struct {
 	*WatchStream[PathAggregation]
-	watchID string
+
+	widMu      sync.Mutex
+	watchID    string
+	recreating bool
+	redo       bool
 }
 
-// WatchID returns the server-side watch id backing this stream.
-func (s *AggregationWatchStream) WatchID() string { return s.watchID }
+// WatchID returns the server-side watch id backing this stream. It changes
+// whenever the stream re-establishes its watch on a new connection.
+func (s *AggregationWatchStream) WatchID() string {
+	s.widMu.Lock()
+	defer s.widMu.Unlock()
+	return s.watchID
+}
 
 // WatchAggregation subscribes to real-time aggregation updates for a set of
 // sources.
@@ -368,14 +377,78 @@ func (a *Arca) WatchAggregation(ctx context.Context, sources []AggregationSource
 	}
 	s := &AggregationWatchStream{WatchStream: newWatchStream[PathAggregation](), watchID: watchID}
 	unsub := a.ws.OnAggregationUpdated(func(wid string, updated *PathAggregation, _ RealmEvent) {
-		if wid == watchID && updated != nil {
+		// The id changes every time the watch is re-established, so this has to
+		// read the current one — a captured id stops matching at the first
+		// reconnect and the stream goes quiet.
+		if updated != nil && wid == s.WatchID() {
 			s.emit(*updated)
 		}
 	})
 	s.addUnsub(unsub)
-	s.addUnsub(func() { a.ws.destroyAggregationWatch(watchID) })
+	// A standalone aggregation watch lives on the connection it was created on:
+	// the server destroys it when that connection closes, and the manager's
+	// post-auth resubscribe does not cover it. Re-establishing it on both hooks
+	// is what keeps the stream alive — a reconnect surfaces as OnAuthenticated,
+	// a rotation only as OnRotated, since it emits no status change. Off the
+	// delivery goroutine, because creating a watch waits for a reply that only
+	// that goroutine can deliver.
+	s.addUnsub(a.ws.OnAuthenticated(func() { go s.recreate(a, sources) }))
+	s.addUnsub(a.ws.OnRotated(func() { go s.recreate(a, sources) }))
+	s.addUnsub(func() { a.ws.destroyAggregationWatch(s.WatchID()) })
 	s.emit(agg)
 	return s, nil
+}
+
+// recreate re-establishes the server-side watch on the current connection. One
+// runs at a time; a trigger that lands during one is honoured afterwards rather
+// than dropped, since the in-flight attempt may already have been written to
+// the connection that just went away.
+func (s *AggregationWatchStream) recreate(a *Arca, sources []AggregationSource) {
+	s.widMu.Lock()
+	if s.recreating {
+		s.redo = true
+		s.widMu.Unlock()
+		return
+	}
+	s.recreating = true
+	s.widMu.Unlock()
+
+	for {
+		s.recreateOnce(a, sources)
+		s.widMu.Lock()
+		again := s.redo && !s.IsClosed()
+		s.redo = false
+		s.recreating = again
+		s.widMu.Unlock()
+		if !again {
+			return
+		}
+	}
+}
+
+func (s *AggregationWatchStream) recreateOnce(a *Arca, sources []AggregationSource) {
+	if s.IsClosed() {
+		return
+	}
+	s.widMu.Lock()
+	previous := s.watchID
+	s.widMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), wsRequestTimeout)
+	defer cancel()
+	watchID, agg, err := a.ws.createAggregationWatch(ctx, sources, "")
+	if err != nil || s.IsClosed() {
+		return
+	}
+	s.widMu.Lock()
+	s.watchID = watchID
+	s.widMu.Unlock()
+	if previous != "" && previous != watchID {
+		// Best effort: after a reconnect the connection it belonged to is gone,
+		// which destroyed it server-side anyway.
+		a.ws.destroyAggregationWatch(previous)
+	}
+	s.emit(agg)
 }
 
 // ObjectWatchStream streams single-object valuation updates.

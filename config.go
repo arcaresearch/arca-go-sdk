@@ -3,6 +3,7 @@ package arca
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 // DefaultBaseURL is the production Arca API base URL.
@@ -43,6 +44,13 @@ type Config struct {
 	// Cache configures the in-memory history cache. Nil uses defaults
 	// (50 entries, 5-minute TTL). Set Disabled to turn caching off.
 	Cache *CacheConfig
+
+	// ConnectionLifetime is how long the realtime connection is kept before it
+	// is rotated onto a fresh one. Nil uses DefaultConnectionLifetime; a
+	// pointer to 0 disables rotation, which means the connection runs until the
+	// infrastructure in front of the server severs it and delivery pauses for
+	// the reconnect.
+	ConnectionLifetime *time.Duration
 }
 
 // Fees holds the platform's fixed fees. The Arca network takes no transfer
@@ -127,12 +135,17 @@ func New(cfg Config) (*Arca, error) {
 	if a.tokenProvider != nil {
 		getToken = a.refreshTokenFromProvider
 	}
+	lifetime := DefaultConnectionLifetime
+	if cfg.ConnectionLifetime != nil {
+		lifetime = *cfg.ConnectionLifetime
+	}
 	a.ws = newWebSocketManager(wsConfig{
 		baseURL:    apiBase,
 		credential: firstNonEmpty(cfg.APIKey, cfg.Token),
 		credType:   a.credType,
 		getRealmID: func() string { return a.currentRealmID() },
 		getToken:   getToken,
+		lifetime:   lifetime,
 	})
 
 	return a, nil

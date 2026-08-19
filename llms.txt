@@ -154,7 +154,21 @@ Aggregation sources: arca.NewPrefixSource(p), NewPathsSource(paths),
 NewPatternSource(p), NewWatchSource(id).
 
 Lower-level access: client.WS() returns *WebSocketManager (On(type, cb),
-typed OnX listeners, OnGap, OnAuthenticated, EnsureConnected, Disconnect).
+typed OnX listeners, OnGap, OnAuthenticated, OnRotated, EnsureConnected,
+RotateConnection, Disconnect).
+
+Gapless rotation: the connection is proactively replaced before the
+infrastructure's maximum socket lifetime severs it. A replacement is warmed
+alongside the live one — authenticated, fully re-subscribed, confirmed by the
+server — and only then takes over, so delivery never pauses. Automatic; nothing
+to call. Config.ConnectionLifetime overrides the default (50m), and a lifetime
+reported by the server wins over it. A pointer to 0 disables rotation and
+outranks both, including a server-reported cap, so the opt-out still works on
+the production fleet — at the cost of an unplanned reconnect. No status
+change is emitted across a rotation and there is no delivery gap; OnRotated
+fires for per-connection server state that the swap cannot carry over (watch
+streams handle their own). WS().RotateConnection() forces one, returning false
+when there is no healthy connection or a handoff is already under way.
 
 ## Admin (realm-less builder client)
 

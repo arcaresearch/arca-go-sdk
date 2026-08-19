@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"sync"
@@ -26,6 +27,35 @@ const (
 	wsStaleThreshold = 45 * time.Second
 	wsMaxReconnect   = 30 * time.Second
 	wsRequestTimeout = 15 * time.Second
+	wsReadLimit      = 16 * 1024 * 1024
+
+	// DefaultConnectionLifetime is how long a connection is kept before it is
+	// rotated. It sits below the cap the production load balancer imposes, so
+	// a handoff that fails still has room for a retry or two before the cap
+	// severs the connection anyway.
+	DefaultConnectionLifetime = 50 * time.Minute
+	// Fraction of the known lifetime at which to rotate.
+	wsRotateAt = 0.85
+	// Rotations are spread out by ±this fraction. Every rotation costs a
+	// resubscribe, and a resubscribe costs the server a full mids snapshot — so
+	// a fleet that rotated on a shared schedule would arrive as a thundering
+	// herd. The jitter is what keeps the cost flat instead of spiky.
+	wsRotateJitter = 0.1
+	// Attempts to promote past in-flight requests before giving up and
+	// retiring the connection anyway.
+	wsPromoteMaxAttempts = 20
+)
+
+// Rotation timings. Vars rather than consts so tests can compress them;
+// nothing in the SDK reassigns them at runtime.
+var (
+	// A warming connection that has not taken over within this budget is
+	// abandoned.
+	wsHandoffTimeout = 10 * time.Second
+	// Delay before retrying a failed handoff.
+	wsHandoffRetry = 60 * time.Second
+	// Wait between attempts to promote past in-flight requests.
+	wsPromoteRetry = 250 * time.Millisecond
 )
 
 type wsConfig struct {
@@ -34,6 +64,22 @@ type wsConfig struct {
 	credType   credentialType
 	getRealmID func() string
 	getToken   func(ctx context.Context) (string, error)
+	// lifetime is the configured connection lifetime; 0 disables rotation.
+	lifetime time.Duration
+}
+
+// handoff tracks a warming connection: one opened alongside the live one that
+// takes over only once the server has confirmed its subscriptions are live.
+// All fields are guarded by WebSocketManager.mu.
+type handoff struct {
+	conn *websocket.Conn
+	// promoted is closed when this connection becomes the primary one.
+	promoted chan struct{}
+	// newGen is the generation this connection owns after promotion.
+	newGen   int
+	timeout  *time.Timer
+	promote  *time.Timer
+	attempts int
 }
 
 type pendingRequest struct {
@@ -57,6 +103,7 @@ type WebSocketManager struct {
 	statusList     map[int]func(ConnectionStatus)
 	gapList        map[int]func(int64)
 	authList       map[int]func()
+	rotatedList    map[int]func()
 	errorList      map[int]func(error)
 	nextListenerID int
 
@@ -75,6 +122,14 @@ type WebSocketManager struct {
 
 	lastDeliverySeq int64
 
+	handoffState  *handoff
+	rotationTimer *time.Timer
+	// serverLifetime is the lifetime reported at auth. It outranks the
+	// configured one: the server sits behind the proxy enforcing the cap, so it
+	// is the only party that knows the real number. Reading it means retuning
+	// the cap is a server-side config change rather than an SDK release.
+	serverLifetime time.Duration
+
 	writeMu sync.Mutex
 }
 
@@ -92,6 +147,7 @@ func newWebSocketManager(cfg wsConfig) *WebSocketManager {
 		statusList:   map[int]func(ConnectionStatus){},
 		gapList:      map[int]func(int64){},
 		authList:     map[int]func(){},
+		rotatedList:  map[int]func(){},
 		errorList:    map[int]func(error){},
 		pathRefs:     map[string]int{},
 		midsCoins:    map[string]int{},
@@ -148,10 +204,11 @@ func (m *WebSocketManager) Reconnect() {
 	conn := m.conn
 	m.conn = nil
 	m.connecting = true
+	m.cancelRotationLocked()
+	warming := m.takeHandoffLocked()
 	m.mu.Unlock()
-	if conn != nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "credential changed")
-	}
+	closeConn(warming, "reconnecting")
+	closeConn(conn, "credential changed")
 	go m.connectLoop(gen)
 }
 
@@ -159,44 +216,81 @@ func (m *WebSocketManager) Reconnect() {
 func (m *WebSocketManager) Disconnect() {
 	m.mu.Lock()
 	m.shouldConnect = false
+	m.connecting = false
 	m.gen++
 	conn := m.conn
 	m.conn = nil
+	m.cancelRotationLocked()
+	warming := m.takeHandoffLocked()
 	m.setStatusLocked(StatusDisconnected)
 	m.mu.Unlock()
-	if conn != nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "client disconnect")
-	}
+	closeConn(warming, "client disconnect")
+	closeConn(conn, "client disconnect")
 }
 
 func (m *WebSocketManager) connectLoop(gen int) {
 	attempt := 0
 	for {
-		m.mu.Lock()
-		if !m.shouldConnect || m.gen != gen {
-			m.connecting = false
-			m.mu.Unlock()
+		if !m.beginAttempt(gen) {
 			return
 		}
-		m.setStatusLocked(StatusConnecting)
-		m.mu.Unlock()
-
-		err := m.dialAndServe(gen)
-		_ = err
-
-		m.mu.Lock()
-		if !m.shouldConnect || m.gen != gen {
-			m.connecting = false
-			m.mu.Unlock()
+		_ = m.dialAndServe(gen)
+		if !m.endAttempt(gen, &attempt) {
 			return
 		}
-		m.setStatusLocked(StatusDisconnected)
-		m.rejectPendingLocked()
-		m.mu.Unlock()
+	}
+}
 
-		delay := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt)), float64(wsMaxReconnect)))
-		attempt++
-		time.Sleep(delay)
+// beginAttempt reports whether this generation should dial.
+func (m *WebSocketManager) beginAttempt(gen int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.shouldConnect || m.gen != gen {
+		m.clearConnectingLocked(gen)
+		return false
+	}
+	m.setStatusLocked(StatusConnecting)
+	return true
+}
+
+// endAttempt records the loss of the connection this generation was serving and
+// sleeps out the reconnect backoff. It reports whether the loop should keep
+// going; false means another generation has taken over (a rotation, an explicit
+// reconnect, or a disconnect) and this one must exit without touching state.
+func (m *WebSocketManager) endAttempt(gen int, attempt *int) bool {
+	m.mu.Lock()
+	if !m.shouldConnect || m.gen != gen {
+		m.clearConnectingLocked(gen)
+		m.mu.Unlock()
+		return false
+	}
+	// The live connection is gone, so a warming replacement for it is moot —
+	// the reconnect below supersedes it.
+	m.cancelRotationLocked()
+	warming := m.takeHandoffLocked()
+	m.setStatusLocked(StatusDisconnected)
+	m.rejectPendingLocked()
+	m.mu.Unlock()
+	closeConn(warming, "primary disconnected")
+
+	delay := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(*attempt)), float64(wsMaxReconnect)))
+	*attempt++
+	time.Sleep(delay)
+	return true
+}
+
+// clearConnectingLocked releases the connect-loop slot, but only if this
+// generation still owns it — a superseding generation has its own loop running
+// and clearing the flag under it would let a second one start alongside.
+func (m *WebSocketManager) clearConnectingLocked(gen int) {
+	if m.gen == gen {
+		m.connecting = false
+	}
+}
+
+func closeConn(conn *websocket.Conn, reason string) {
+	if conn != nil {
+		_ = conn.Close(websocket.StatusNormalClosure, reason)
 	}
 }
 
@@ -221,7 +315,7 @@ func (m *WebSocketManager) dialAndServe(gen int) error {
 	if err != nil {
 		return err
 	}
-	conn.SetReadLimit(16 * 1024 * 1024)
+	conn.SetReadLimit(wsReadLimit)
 
 	m.mu.Lock()
 	if !m.shouldConnect || m.gen != gen {
@@ -232,28 +326,7 @@ func (m *WebSocketManager) dialAndServe(gen int) error {
 	m.conn = conn
 	m.mu.Unlock()
 
-	// Send auth.
-	m.mu.Lock()
-	cred := m.cfg.credential
-	credType := m.cfg.credType
-	realmID := m.cfg.getRealmID()
-	getToken := m.cfg.getToken
-	m.mu.Unlock()
-	if getToken != nil {
-		if t, terr := getToken(context.Background()); terr == nil {
-			cred = t
-			m.mu.Lock()
-			m.cfg.credential = t
-			m.mu.Unlock()
-		}
-	}
-	auth := map[string]any{"action": "auth", "realmId": realmID}
-	if credType == credAPIKey {
-		auth["apiKey"] = cred
-	} else {
-		auth["token"] = cred
-	}
-	if err := m.writeJSON(conn, auth); err != nil {
+	if err := m.writeJSON(conn, m.authMessage()); err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "auth write failed")
 		return err
 	}
@@ -277,8 +350,44 @@ func (m *WebSocketManager) dialAndServe(gen int) error {
 			m.mu.Unlock()
 			return rerr
 		}
+		m.mu.Lock()
+		current := m.gen == gen && m.conn == conn
+		m.mu.Unlock()
+		if !current {
+			// A rotation (or an explicit reconnect) has already moved delivery
+			// onto another connection, and that one is carrying the same
+			// stream — anything still buffered here would be a second copy.
+			_ = conn.Close(websocket.StatusNormalClosure, "superseded")
+			return nil
+		}
 		m.handleMessage(data)
 	}
+}
+
+// authMessage builds the auth frame, refreshing the credential first when a
+// token provider is configured.
+func (m *WebSocketManager) authMessage() map[string]any {
+	m.mu.Lock()
+	cred := m.cfg.credential
+	credType := m.cfg.credType
+	realmID := m.cfg.getRealmID()
+	getToken := m.cfg.getToken
+	m.mu.Unlock()
+	if getToken != nil {
+		if t, terr := getToken(context.Background()); terr == nil {
+			cred = t
+			m.mu.Lock()
+			m.cfg.credential = t
+			m.mu.Unlock()
+		}
+	}
+	auth := map[string]any{"action": "auth", "realmId": realmID}
+	if credType == credAPIKey {
+		auth["apiKey"] = cred
+	} else {
+		auth["token"] = cred
+	}
+	return auth
 }
 
 func (m *WebSocketManager) heartbeat(conn *websocket.Conn, stop <-chan struct{}) {
@@ -331,7 +440,7 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 	case "pong":
 		return
 	case "authenticated":
-		m.onAuthenticated()
+		m.onAuthenticated(data)
 		return
 	case "error":
 		if head.RequestID != "" && m.resolvePending(head.RequestID, data) {
@@ -419,12 +528,36 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 	}
 }
 
-func (m *WebSocketManager) onAuthenticated() {
+func (m *WebSocketManager) onAuthenticated(data []byte) {
+	m.readServerLifetime(data)
+
 	m.mu.Lock()
 	m.lastDeliverySeq = 0
 	m.setStatusLocked(StatusConnected)
 	conn := m.conn
-	// Resubscribe from ref state.
+	authCbs := make([]func(), 0, len(m.authList))
+	for _, cb := range m.authList {
+		authCbs = append(authCbs, cb)
+	}
+	m.mu.Unlock()
+
+	if conn != nil {
+		m.resubscribe(conn)
+	}
+	m.scheduleRotation(0)
+
+	// Notified after every subscription is re-issued so any chart-history watch
+	// ids they depend on are already registered.
+	for _, cb := range authCbs {
+		cb()
+	}
+}
+
+// resubscribe re-issues every active subscription on conn. It targets an
+// explicit connection rather than the current one so a warming connection can
+// be brought fully up to date before it takes over.
+func (m *WebSocketManager) resubscribe(conn *websocket.Conn) {
+	m.mu.Lock()
 	desiredMids, midsOK := m.midsSubscriptionCoinsLocked()
 	midsExch := m.midsExch
 	var candleCoins []string
@@ -455,44 +588,422 @@ func (m *WebSocketManager) onAuthenticated() {
 	for k, v := range m.chartWatches {
 		chartWatches[k] = v
 	}
-	authCbs := make([]func(), 0, len(m.authList))
-	for _, cb := range m.authList {
-		authCbs = append(authCbs, cb)
+	m.mu.Unlock()
+
+	if midsOK {
+		_ = m.writeJSON(conn, map[string]any{"action": "subscribe_mids", "exchange": midsExch, "coins": desiredMids})
+	}
+	if len(candleCoins) > 0 {
+		ivs := make([]CandleInterval, 0, len(candleIntervals))
+		for iv := range candleIntervals {
+			ivs = append(ivs, iv)
+		}
+		_ = m.writeJSON(conn, map[string]any{"action": "subscribe_candles", "coins": candleCoins, "intervals": ivs, "batch": true})
+	}
+	if len(oiCoins) > 0 {
+		ivs := make([]CandleInterval, 0, len(oiIntervals))
+		for iv := range oiIntervals {
+			ivs = append(ivs, iv)
+		}
+		_ = m.writeJSON(conn, map[string]any{"action": "subscribe_oi", "coins": oiCoins, "intervals": ivs})
+	}
+	if len(tradeCoins) > 0 {
+		_ = m.writeJSON(conn, map[string]any{"action": "subscribe_trades", "coins": tradeCoins})
+	}
+	for _, p := range paths {
+		_ = m.writeJSON(conn, map[string]any{"action": "watch", "path": p, "requestId": m.newRequestID()})
+	}
+	for watchID, req := range chartWatches {
+		_ = m.writeJSON(conn, map[string]any{"action": "watch_chart_history", "watchId": watchID, "target": req.target, "kind": req.kind, "objectId": req.objectID})
+	}
+}
+
+// ---- Gapless rotation ----
+//
+// Infrastructure in front of the server caps how long any connection may stay
+// open, and for a WebSocket that cap is a maximum lifetime rather than an idle
+// timeout — a busy connection is severed on schedule. Reaching it means an
+// unplanned reconnect (backoff, TCP, TLS, auth, resubscribe) during which a
+// price display holds its last value and appears frozen. Rotating first turns
+// that into a handoff between two live connections.
+
+// RotateConnection replaces the current connection with a fresh one without
+// interrupting delivery.
+//
+// The replacement authenticates and re-issues every subscription while the
+// current connection keeps streaming. Only once the server confirms those
+// subscriptions are live does it take over, and only then is the old one
+// closed — so there is no window in which nothing is subscribed. A failure
+// anywhere along the way leaves the current connection untouched and serving,
+// which makes the worst case "nothing happened".
+//
+// Returns false when there is no healthy connection to hand off from, or when a
+// handoff is already under way.
+func (m *WebSocketManager) RotateConnection() bool {
+	m.mu.Lock()
+	if !m.shouldConnect || m.handoffState != nil || m.status != StatusConnected || m.conn == nil {
+		m.mu.Unlock()
+		return false
+	}
+	h := &handoff{promoted: make(chan struct{})}
+	m.handoffState = h
+	gen := m.gen
+	m.mu.Unlock()
+
+	// Armed before the connection is dialed so a half-built one can never be
+	// left hanging around unnoticed.
+	t := time.AfterFunc(wsHandoffTimeout, func() {
+		if m.abortHandoffIf(h) {
+			m.scheduleRotation(wsHandoffRetry)
+		}
+	})
+	m.mu.Lock()
+	if m.handoffState == h {
+		h.timeout = t
+	} else {
+		t.Stop()
 	}
 	m.mu.Unlock()
 
-	if conn != nil {
-		if midsOK {
-			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_mids", "exchange": midsExch, "coins": desiredMids})
+	go m.serveHandoff(gen, h)
+	return true
+}
+
+// OnRotated fires when delivery has moved to a new connection without an
+// outage (see RotateConnection). Returns an unsubscribe func.
+//
+// This is not a reconnect: no status change is emitted, nothing was missed, and
+// there is no gap to recover. It exists for state the server holds
+// per-connection and therefore cannot survive the swap — a standalone
+// aggregation watch has to be re-created against the new connection, because
+// the old one died with the connection it was registered on. Anything the
+// manager re-issues itself (mids, candles, OI, trades, path watches,
+// chart-history watches) is already handled and needs no hook.
+//
+// Do NOT use this to refetch history or run gap recovery; OnAuthenticated is
+// the hook for that. Rotations are routine, so a refetch here multiplies into
+// steady background load across every connected client. Handlers run on the
+// delivery goroutine, so anything that waits on the server belongs in its own
+// goroutine.
+func (m *WebSocketManager) OnRotated(handler func()) func() {
+	m.mu.Lock()
+	id := m.nextListenerID
+	m.nextListenerID++
+	m.rotatedList[id] = handler
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		delete(m.rotatedList, id)
+		m.mu.Unlock()
+	}
+}
+
+// serveHandoff warms a second connection and, if it is promoted, keeps serving
+// on it as the primary read loop until it too drops.
+func (m *WebSocketManager) serveHandoff(gen int, h *handoff) {
+	promotedGen := m.warmAndServe(gen, h)
+	if promotedGen == 0 {
+		return
+	}
+	// This connection took over and has now dropped. It owns its generation, so
+	// from here it runs the same reconnect cycle connectLoop does.
+	attempt := 0
+	if !m.endAttempt(promotedGen, &attempt) {
+		return
+	}
+	m.connectLoop(promotedGen)
+}
+
+// warmAndServe dials the replacement, brings it up to date, and serves it. It
+// returns the generation it was promoted under, or 0 if it never took over.
+func (m *WebSocketManager) warmAndServe(gen int, h *handoff) int {
+	dialCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	conn, _, err := websocket.Dial(dialCtx, m.wsURL(), nil)
+	cancel()
+	if err != nil {
+		if m.abortHandoffIf(h) {
+			m.scheduleRotation(wsHandoffRetry)
 		}
-		if len(candleCoins) > 0 {
-			ivs := make([]CandleInterval, 0, len(candleIntervals))
-			for iv := range candleIntervals {
-				ivs = append(ivs, iv)
-			}
-			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_candles", "coins": candleCoins, "intervals": ivs, "batch": true})
+		return 0
+	}
+	conn.SetReadLimit(wsReadLimit)
+
+	m.mu.Lock()
+	if m.handoffState != h || !m.shouldConnect || m.gen != gen {
+		m.mu.Unlock()
+		_ = conn.Close(websocket.StatusNormalClosure, "handoff superseded")
+		return 0
+	}
+	h.conn = conn
+	m.mu.Unlock()
+
+	if err := m.writeJSON(conn, m.authMessage()); err != nil {
+		_ = conn.Close(websocket.StatusInternalError, "auth write failed")
+		if m.abortHandoffIf(h) {
+			m.scheduleRotation(wsHandoffRetry)
 		}
-		if len(oiCoins) > 0 {
-			ivs := make([]CandleInterval, 0, len(oiIntervals))
-			for iv := range oiIntervals {
-				ivs = append(ivs, iv)
-			}
-			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_oi", "coins": oiCoins, "intervals": ivs})
-		}
-		if len(tradeCoins) > 0 {
-			_ = m.writeJSON(conn, map[string]any{"action": "subscribe_trades", "coins": tradeCoins})
-		}
-		for _, p := range paths {
-			_ = m.writeJSON(conn, map[string]any{"action": "watch", "path": p, "requestId": m.newRequestID()})
-		}
-		for watchID, req := range chartWatches {
-			_ = m.writeJSON(conn, map[string]any{"action": "watch_chart_history", "watchId": watchID, "target": req.target, "kind": req.kind, "objectId": req.objectID})
-		}
+		return 0
 	}
 
-	for _, cb := range authCbs {
+	// The heartbeat belongs to whichever connection consumers are reading from;
+	// while warming, the promotion barrier is the only ping that goes out.
+	pingStop := make(chan struct{})
+	defer close(pingStop)
+	go func() {
+		select {
+		case <-pingStop:
+		case <-h.promoted:
+			m.heartbeat(conn, pingStop)
+		}
+	}()
+
+	promotedGen := 0
+	for {
+		readCtx, readCancel := context.WithTimeout(context.Background(), wsStaleThreshold)
+		_, data, rerr := conn.Read(readCtx)
+		readCancel()
+
+		// Resolved under the same lock promotion takes, so a message is either
+		// decided before the swap (dropped — the retiring connection is still
+		// carrying the same stream) or after it (dispatched — the retiring
+		// connection is already closed and silenced).
+		m.mu.Lock()
+		promoted := m.conn == conn
+		if promoted {
+			promotedGen = h.newGen
+		}
+		mine := m.handoffState == h
+		m.mu.Unlock()
+
+		if rerr != nil {
+			_ = conn.Close(websocket.StatusNormalClosure, "read error")
+			if !promoted {
+				// A warming connection died before taking over. The live one
+				// never stopped serving, so consumers see nothing; try again
+				// later rather than escalating to the reconnect path.
+				if m.abortHandoffIf(h) {
+					m.scheduleRotation(wsHandoffRetry)
+				}
+				return 0
+			}
+			m.mu.Lock()
+			if m.conn == conn {
+				m.conn = nil
+			}
+			m.mu.Unlock()
+			return promotedGen
+		}
+
+		if promoted {
+			m.handleMessage(data)
+			continue
+		}
+		if !mine {
+			_ = conn.Close(websocket.StatusNormalClosure, "handoff superseded")
+			return 0
+		}
+		m.handleWarmMessage(h, conn, data)
+	}
+}
+
+// handleWarmMessage processes a message on a connection that has not taken over
+// yet. It takes no part in event delivery or gap tracking.
+func (m *WebSocketManager) handleWarmMessage(h *handoff, conn *websocket.Conn, data []byte) {
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &head) != nil {
+		return
+	}
+	switch head.Type {
+	case "error":
+		if m.abortHandoffIf(h) {
+			m.scheduleRotation(wsHandoffRetry)
+		}
+	case "authenticated":
+		m.readServerLifetime(data)
+		m.resubscribe(conn)
+		// Queued behind the batch above; its reply is the barrier this
+		// connection takes over on.
+		_ = m.writeJSON(conn, map[string]any{"action": "ping"})
+	case "pong":
+		// The server reads one connection's messages in order, so a reply to a
+		// ping queued behind the resubscribe batch proves every subscription in
+		// that batch is registered — from here on, live broadcasts reach this
+		// connection. That is what makes this the point where it can take over
+		// without leaving a gap.
+		//
+		// Any snapshot those subscriptions trigger is sent asynchronously and
+		// may well arrive after this pong, so it is not part of the barrier —
+		// and it is not needed, because the connection being retired has been
+		// delivering the same stream right up to this moment, leaving consumer
+		// state current at the swap.
+		m.clearHandoffTimeout(h)
+		m.promoteHandoff(h)
+	default:
+		// The live connection is carrying this same stream, so anything
+		// arriving here before the takeover duplicates something consumers
+		// already have. Dropping it avoids a double dispatch and keeps gap
+		// detection on a single sequence space.
+	}
+}
+
+// promoteHandoff hands delivery over to the warmed connection and retires the
+// current one.
+func (m *WebSocketManager) promoteHandoff(h *handoff) {
+	m.mu.Lock()
+	// Still being the current handoff is the liveness test: the read loop
+	// clears it the moment the warming connection fails, and there is no
+	// cheaper "is it open" question to ask a *websocket.Conn.
+	if m.handoffState != h || h.conn == nil {
+		m.mu.Unlock()
+		return
+	}
+	// Retiring the current connection rejects anything still awaiting a reply
+	// on it. A rotation has slack by construction — it runs well before the
+	// lifetime it exists to avoid — so wait for the reply instead of turning it
+	// into a spurious failure.
+	if len(m.pending) > 0 && h.attempts < wsPromoteMaxAttempts {
+		h.attempts++
+		if h.promote != nil {
+			h.promote.Stop()
+		}
+		h.promote = time.AfterFunc(wsPromoteRetry, func() { m.promoteHandoff(h) })
+		m.mu.Unlock()
+		return
+	}
+
+	retired := m.conn
+	m.conn = h.conn
+	// A fresh generation retires the loop that was serving: its read failure
+	// must not be read as a disconnect, and it must not schedule a competing
+	// reconnect against the connection that just took over. Ownership of the
+	// reconnect cycle moves with it, hence the connecting flag.
+	m.gen++
+	m.connecting = true
+	h.newGen = m.gen
+	// New connection, new sequence space. Carrying the old cursor across would
+	// report a gap that did not happen.
+	m.lastDeliverySeq = 0
+	m.stopHandoffTimersLocked(h)
+	m.handoffState = nil
+	rotatedCbs := make([]func(), 0, len(m.rotatedList))
+	for _, cb := range m.rotatedList {
+		rotatedCbs = append(rotatedCbs, cb)
+	}
+	m.mu.Unlock()
+
+	close(h.promoted)
+	closeConn(retired, "rotated")
+	m.scheduleRotation(0)
+
+	// Status deliberately does not move. Delivery never stopped, so emitting
+	// StatusDisconnected would put consumers into a reconnecting state and run
+	// gap recovery for a gap that did not happen. State the swap genuinely
+	// cannot carry over is re-established through OnRotated instead.
+	for _, cb := range rotatedCbs {
 		cb()
 	}
+}
+
+// abortHandoffIf abandons h if it is still the current handoff, reporting
+// whether it did. The live connection is left exactly as it was.
+func (m *WebSocketManager) abortHandoffIf(h *handoff) bool {
+	m.mu.Lock()
+	if m.handoffState != h {
+		m.mu.Unlock()
+		return false
+	}
+	m.handoffState = nil
+	m.stopHandoffTimersLocked(h)
+	conn := h.conn
+	m.mu.Unlock()
+	closeConn(conn, "handoff abandoned")
+	return true
+}
+
+// takeHandoffLocked detaches any warming connection and returns it for the
+// caller to close once it has released the lock.
+func (m *WebSocketManager) takeHandoffLocked() *websocket.Conn {
+	h := m.handoffState
+	if h == nil {
+		return nil
+	}
+	m.handoffState = nil
+	m.stopHandoffTimersLocked(h)
+	return h.conn
+}
+
+func (m *WebSocketManager) stopHandoffTimersLocked(h *handoff) {
+	if h.timeout != nil {
+		h.timeout.Stop()
+		h.timeout = nil
+	}
+	if h.promote != nil {
+		h.promote.Stop()
+		h.promote = nil
+	}
+}
+
+func (m *WebSocketManager) clearHandoffTimeout(h *handoff) {
+	m.mu.Lock()
+	if m.handoffState == h && h.timeout != nil {
+		h.timeout.Stop()
+		h.timeout = nil
+	}
+	m.mu.Unlock()
+}
+
+// scheduleRotation arms the next rotation. A non-zero delay overrides the
+// schedule, which is how a failed handoff retries before the lifetime it is
+// racing runs out.
+func (m *WebSocketManager) scheduleRotation(delay time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancelRotationLocked()
+	if delay <= 0 {
+		// A configured 0 is an opt-out and outranks the server's figure. The
+		// server reports a real constraint, so it wins over any other
+		// configured value — but it must not resurrect rotation for a caller
+		// who turned it off, or the documented escape hatch would be
+		// inoperative on the one fleet that advertises a cap.
+		lifetime := m.cfg.lifetime
+		if lifetime != 0 && m.serverLifetime > 0 {
+			lifetime = m.serverLifetime
+		}
+		if lifetime <= 0 {
+			return
+		}
+		base := float64(lifetime) * wsRotateAt
+		spread := base * wsRotateJitter
+		delay = time.Duration(base - spread + rand.Float64()*spread*2)
+	}
+	m.rotationTimer = time.AfterFunc(delay, func() { m.RotateConnection() })
+}
+
+func (m *WebSocketManager) cancelRotationLocked() {
+	if m.rotationTimer != nil {
+		m.rotationTimer.Stop()
+		m.rotationTimer = nil
+	}
+}
+
+// readServerLifetime adopts the connection lifetime the server reports at auth,
+// which outranks the configured one.
+func (m *WebSocketManager) readServerLifetime(data []byte) {
+	var msg struct {
+		MaxConnectionLifetimeSec *float64 `json:"maxConnectionLifetimeSec"`
+	}
+	if json.Unmarshal(data, &msg) != nil || msg.MaxConnectionLifetimeSec == nil {
+		return
+	}
+	sec := *msg.MaxConnectionLifetimeSec
+	if sec <= 0 || math.IsInf(sec, 0) || math.IsNaN(sec) {
+		return
+	}
+	m.mu.Lock()
+	m.serverLifetime = time.Duration(sec * float64(time.Second))
+	m.mu.Unlock()
 }
 
 // ---- Listeners ----
@@ -735,13 +1246,27 @@ func (m *WebSocketManager) sendWhenConnected(msg any) {
 		m.send(msg)
 		return
 	}
-	var unsub func()
-	unsub = m.OnAuthenticated(func() {
-		m.send(msg)
-		if unsub != nil {
-			unsub()
+	m.onAuthenticatedOnce(func() { m.send(msg) })
+}
+
+// onAuthenticatedOnce runs handler on the next authenticated event and then
+// removes itself. It deregisters by the id it holds rather than by an unsub
+// closure the handler would have to read back, which the delivery goroutine can
+// reach before the registering one has stored it.
+func (m *WebSocketManager) onAuthenticatedOnce(handler func()) {
+	m.mu.Lock()
+	id := m.nextListenerID
+	m.nextListenerID++
+	m.authList[id] = func() {
+		m.mu.Lock()
+		_, live := m.authList[id]
+		delete(m.authList, id)
+		m.mu.Unlock()
+		if live {
+			handler()
 		}
-	})
+	}
+	m.mu.Unlock()
 }
 
 // ---- Mids / candles / trades subscriptions ----
