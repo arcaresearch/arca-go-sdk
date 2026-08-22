@@ -439,6 +439,21 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 	switch head.Type {
 	case "pong":
 		return
+	case "stream.resync":
+		// The server announced that events for this connection were dropped
+		// BEFORE they were sequenced (delivery-queue overflow under
+		// backpressure), so no deliverySeq gap will ever reveal the loss —
+		// this marker is the only signal. Run the same recovery as a
+		// detected gap; the count is a floor of 1 (the server knows events
+		// were lost, not how many). The marker carries its own deliverySeq,
+		// so the sequence check runs first and stays contiguous for
+		// subsequent messages. A control message: never dispatched to event
+		// listeners.
+		if head.DeliverySeq != nil {
+			m.checkGap(*head.DeliverySeq)
+		}
+		m.emitGap(1)
+		return
 	case "authenticated":
 		m.onAuthenticated(data)
 		return
@@ -1046,6 +1061,12 @@ func (m *WebSocketManager) OnStatus(handler func(ConnectionStatus)) func() {
 
 // OnGap registers a delivery-sequence gap listener (receives the count of
 // missed events). Watch streams use this to trigger targeted refetches.
+//
+// Fires for two kinds of loss: a hole the client observed in the
+// server-assigned deliverySeq (missed is exact), and a server-announced
+// stream.resync marker — events dropped before they were sequenced, a loss
+// no sequence check can see (missed is a floor of 1). Both mean the same
+// thing for recovery: refetch.
 func (m *WebSocketManager) OnGap(handler func(missed int64)) func() {
 	m.mu.Lock()
 	id := m.nextListenerID
@@ -1138,19 +1159,25 @@ func (m *WebSocketManager) checkGap(seq int64) {
 	m.mu.Lock()
 	last := m.lastDeliverySeq
 	m.lastDeliverySeq = seq
-	var cbs []func(int64)
+	m.mu.Unlock()
 	if last > 0 && seq > last+1 {
-		missed := seq - last - 1
-		for _, cb := range m.gapList {
-			cbs = append(cbs, cb)
-		}
-		m.mu.Unlock()
-		for _, cb := range cbs {
-			cb(missed)
-		}
-		return
+		m.emitGap(seq - last - 1)
+	}
+}
+
+// emitGap fires every gap listener with the given missed count. checkGap uses
+// it for detected deliverySeq holes; the stream.resync handler uses it for
+// server-announced loss, where the count is a floor of 1.
+func (m *WebSocketManager) emitGap(missed int64) {
+	m.mu.Lock()
+	cbs := make([]func(int64), 0, len(m.gapList))
+	for _, cb := range m.gapList {
+		cbs = append(cbs, cb)
 	}
 	m.mu.Unlock()
+	for _, cb := range cbs {
+		cb(missed)
+	}
 }
 
 // ---- Request/response ----

@@ -157,6 +157,13 @@ Lower-level access: client.WS() returns *WebSocketManager (On(type, cb),
 typed OnX listeners, OnGap, OnAuthenticated, OnRotated, EnsureConnected,
 RotateConnection, Disconnect).
 
+OnGap(func(missed int64)) fires on delivery loss, from either source: a hole
+the client observed in the server-assigned deliverySeq (missed is exact), or
+a server-sent stream.resync marker announcing that events were dropped before
+they were sequenced — a loss no sequence check can see (missed is a floor of
+1). Both mean the same thing: refetch. Watch streams already do this
+internally; register OnGap only for state you track yourself.
+
 Gapless rotation: the connection is proactively replaced before the
 infrastructure's maximum socket lifetime severs it. A replacement is warmed
 alongside the live one — authenticated, fully re-subscribed, confirmed by the
