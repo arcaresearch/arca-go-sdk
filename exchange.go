@@ -905,6 +905,45 @@ func (a *Arca) ListFills(ctx context.Context, objectID string, opts *ListFillsOp
 	return out, err
 }
 
+// ListRealmFills lists fills across ALL exchange objects in the realm,
+// keyset-paginated. It is the durable replay surface behind WatchRealmFills:
+// with the default ascending order, "give me everything since my last
+// processed fill" is one paged scan from the persisted cursor. Each fill
+// carries ObjectID so a realm-wide consumer can attribute it.
+//
+// Requires a credential with realm-wide read (arca:ReadObject on resource
+// "*"); object-scoped credentials are refused.
+func (a *Arca) ListRealmFills(ctx context.Context, opts *ListRealmFillsOptions) (FillListResponse, error) {
+	var out FillListResponse
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	params := url.Values{"realmId": {rid}}
+	if opts != nil {
+		if opts.Market != "" {
+			params.Set("market", opts.Market)
+		}
+		if opts.StartTime != "" {
+			params.Set("startTime", opts.StartTime)
+		}
+		if opts.EndTime != "" {
+			params.Set("endTime", opts.EndTime)
+		}
+		if opts.Limit > 0 {
+			params.Set("limit", strconv.Itoa(opts.Limit))
+		}
+		if opts.Cursor != "" {
+			params.Set("cursor", opts.Cursor)
+		}
+		if opts.Order != "" {
+			params.Set("order", opts.Order)
+		}
+	}
+	err = a.client.get(ctx, "/exchange/fills", params, &out)
+	return out, err
+}
+
 // TradeSummary returns per-market P&L aggregation for an exchange object.
 func (a *Arca) TradeSummary(ctx context.Context, objectID string, opts *TradeSummaryOptions) (TradeSummaryResponse, error) {
 	var out TradeSummaryResponse

@@ -3,6 +3,7 @@ package arca
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // WatchState is the lifecycle state of a watch stream. Streams never terminally
@@ -592,6 +593,352 @@ func (a *Arca) WatchFills(ctx context.Context, objectID string, opts *ListFillsO
 	s.addUnsub(u2)
 	s.addUnsub(func() { a.ws.unwatchPath(s.objectPath) })
 	return s, nil
+}
+
+// ---- Realm-wide fill stream (catch-up-then-tail) ----
+
+const (
+	// realmFillsPageLimit is the page size used for durable-log replay. It
+	// matches the server's maximum, so "partial page" reliably means "head
+	// of the log reached".
+	realmFillsPageLimit = 500
+	// realmFillsDedupeWindow bounds the recent-fill-id LRU used to drop
+	// duplicates in the catch-up/tail overlap window. Best-effort only: the
+	// stream's contract is at-least-once, so a duplicate escaping the
+	// window is allowed, and consumers must process idempotently by fill id.
+	realmFillsDedupeWindow = 512
+)
+
+// encodeRealmFillCursor mints the opaque resume cursor for a fill from its
+// (createdAt, id) keyset position — the same encoding the server's realm-wide
+// fills listing returns. CreatedAt on both REST fills and fill.recorded
+// events is the position_ledger row's commit timestamp in the canonical
+// layout, which is what makes a client-minted cursor byte-identical to a
+// server-minted one.
+func encodeRealmFillCursor(createdAt, id string) string {
+	if createdAt == "" || id == "" {
+		return ""
+	}
+	return createdAt + "|" + id
+}
+
+// RealmFillUpdate is one delivery from RealmFillWatchStream.
+type RealmFillUpdate struct {
+	Fill Fill
+	// Cursor is the stream's durable resume position after this fill.
+	// Persist it after processing; passing it back as
+	// WatchRealmFillsOptions.FromCursor resumes with no loss. It can lag
+	// the fill itself (live fills delivered while a replay is in flight
+	// keep the replay's position), which only ever causes re-delivery —
+	// never a skip.
+	Cursor string
+	// Replayed is true when the fill came from a durable-log replay
+	// (catch-up after open, gap recovery, reconnect) rather than the live
+	// tail.
+	Replayed bool
+}
+
+// RealmFillWatchStream streams every recorded fill in the realm with
+// at-least-once delivery. See WatchRealmFills.
+type RealmFillWatchStream struct {
+	*WatchStream[RealmFillUpdate]
+
+	arca *Arca
+
+	replayCh chan struct{}
+	stopCh   chan struct{}
+
+	fmu          sync.Mutex
+	started      bool
+	cursor       string
+	replaying    bool
+	replayQueued bool
+	seen         map[string]struct{}
+	seenOrder    []string
+}
+
+// Cursor returns the stream's current durable resume position.
+func (s *RealmFillWatchStream) Cursor() string {
+	s.fmu.Lock()
+	defer s.fmu.Unlock()
+	return s.cursor
+}
+
+// start begins delivery on the first consumer attach. Deferring the initial
+// catch-up (and live-tail delivery) until a consumer exists is what makes
+// OnUpdate loss-free: an emission before the callback attaches would be
+// dropped by the base stream, and because it advances the internal cursor,
+// the next persisted position would silently skip past it — an at-least-once
+// violation. Pre-start live fills are deliberately ignored; they are in the
+// durable log, and the first replay (which starts here, from a cursor no
+// delivery has advanced) re-covers them.
+func (s *RealmFillWatchStream) start() {
+	s.fmu.Lock()
+	if s.started {
+		s.fmu.Unlock()
+		return
+	}
+	s.started = true
+	s.fmu.Unlock()
+	go s.replayLoop()
+	s.scheduleReplay()
+}
+
+// OnUpdate registers an update callback and starts delivery on first attach.
+func (s *RealmFillWatchStream) OnUpdate(cb func(RealmFillUpdate)) func() {
+	unsub := s.WatchStream.OnUpdate(cb)
+	s.start()
+	return unsub
+}
+
+// Updates returns the update channel and starts delivery on first use.
+func (s *RealmFillWatchStream) Updates() <-chan RealmFillUpdate {
+	s.start()
+	return s.WatchStream.Updates()
+}
+
+// Ready blocks until the first delivery, starting the stream if needed.
+func (s *RealmFillWatchStream) Ready(ctx context.Context) error {
+	s.start()
+	return s.WatchStream.Ready(ctx)
+}
+
+// WatchRealmFills streams every recorded fill across ALL exchange objects in
+// the realm, with at-least-once delivery and downtime replay.
+//
+// Delivery model — catch-up-then-tail:
+//  1. Catch-up: fills after FromCursor are replayed in order from the
+//     durable log (the realm-wide fills listing).
+//  2. Tail: live fill.recorded events are delivered as they happen.
+//  3. Self-heal: on a detected delivery gap, a server resync marker, or a
+//     reconnect, the stream silently re-runs catch-up from its last durable
+//     position.
+//
+// Consumer contract: process each fill idempotently keyed on Fill.ID, then
+// persist Cursor. Duplicates are possible by design (a small recent-id
+// window drops most catch-up/tail overlap); missing a fill is not, as long
+// as the consumer resumes from its persisted cursor. Fill.ObjectID carries
+// the owning exchange object.
+//
+// Delivery begins when the first consumer attaches (OnUpdate, Updates, or
+// Ready) — the initial catch-up is deferred until then so no replayed fill
+// can be emitted before anyone is listening.
+//
+// Requires a credential with realm-wide read (arca:ReadObject on "*") and
+// arca:Subscribe.
+func (a *Arca) WatchRealmFills(ctx context.Context, opts *WatchRealmFillsOptions) (*RealmFillWatchStream, error) {
+	if err := a.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	fromCursor := ""
+	if opts != nil {
+		fromCursor = opts.FromCursor
+	}
+	s := &RealmFillWatchStream{
+		WatchStream: newWatchStream[RealmFillUpdate](),
+		arca:        a,
+		cursor:      fromCursor,
+		seen:        map[string]struct{}{},
+		replayCh:    make(chan struct{}, 1),
+		stopCh:      make(chan struct{}),
+	}
+	if fromCursor == "" {
+		// "Start from now": seed the head-of-log position so gap recovery
+		// has a floor to replay from before the first live fill arrives. An
+		// empty realm leaves the cursor empty, and replay-from-empty is
+		// still correct — the whole (empty-at-open) history is after us.
+		head, err := a.ListRealmFills(ctx, &ListRealmFillsOptions{Order: "desc", Limit: 1})
+		if err != nil {
+			return nil, err
+		}
+		if len(head.Fills) > 0 {
+			s.cursor = encodeRealmFillCursor(head.Fills[0].CreatedAt, head.Fills[0].ID)
+		}
+	}
+
+	a.ws.EnsureConnected()
+	go func() { _, _ = a.ws.watchPath(context.Background(), "/") }()
+	s.addUnsub(a.ws.OnFillRecorded(s.onLiveFill))
+	// Both loss signals funnel into the same recovery: replay the durable
+	// log from the last cursor. OnGap covers observed deliverySeq holes and
+	// server-announced resync markers; OnAuthenticated covers reconnects
+	// (everything during the outage was lost without a gap to observe).
+	s.addUnsub(a.ws.OnGap(func(int64) { s.scheduleReplay() }))
+	s.addUnsub(a.ws.OnAuthenticated(func() { s.scheduleReplay() }))
+	s.addUnsub(func() { a.ws.unwatchPath("/") })
+	s.addUnsub(func() { close(s.stopCh) })
+	// The initial catch-up (which also closes the seam between the
+	// head-seed read above and the live subscription) is scheduled by
+	// start() on the first consumer attach — see the delivery-start note
+	// in the method doc.
+	return s, nil
+}
+
+func (s *RealmFillWatchStream) onLiveFill(ev RealmEvent) {
+	s.fmu.Lock()
+	started := s.started
+	s.fmu.Unlock()
+	if !started {
+		// No consumer yet: ignore rather than deliver-to-nobody. The fill
+		// is in the durable log and the cursor has not moved, so the
+		// first replay after start() re-covers it.
+		return
+	}
+	if ev.Fill == nil || ev.Fill.ID == "" {
+		return
+	}
+	f := fillFromRecordedEvent(ev)
+	// CreatedAt is empty on events from workers predating the enrichment;
+	// the fill is still delivered, the cursor just doesn't advance (the
+	// next replay re-covers it — duplicates over loss).
+	s.deliver(f, encodeRealmFillCursor(f.CreatedAt, f.ID), false)
+}
+
+// deliver is the single serialization point for both the live tail and the
+// replay loop: dedupe by fill id, advance the durable cursor, emit.
+//
+// The cursor only advances from a live fill when no replay is active or
+// queued. A live fill can arrive ahead of rows a replay hasn't scanned yet;
+// letting it advance the cursor mid-replay would let a crash-then-resume
+// skip those rows — the one failure the at-least-once contract forbids.
+func (s *RealmFillWatchStream) deliver(f Fill, cursor string, replayed bool) {
+	s.fmu.Lock()
+	_, dup := s.seen[f.ID]
+	if !dup {
+		s.seen[f.ID] = struct{}{}
+		s.seenOrder = append(s.seenOrder, f.ID)
+		if len(s.seenOrder) > realmFillsDedupeWindow {
+			delete(s.seen, s.seenOrder[0])
+			s.seenOrder = s.seenOrder[1:]
+		}
+	}
+	if cursor != "" && (replayed || (!s.replaying && !s.replayQueued)) {
+		s.cursor = cursor
+	}
+	cur := s.cursor
+	s.fmu.Unlock()
+	if dup {
+		return
+	}
+	s.emit(RealmFillUpdate{Fill: f, Cursor: cur, Replayed: replayed})
+}
+
+func (s *RealmFillWatchStream) scheduleReplay() {
+	s.fmu.Lock()
+	s.replayQueued = true
+	s.fmu.Unlock()
+	select {
+	case s.replayCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *RealmFillWatchStream) replayLoop() {
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-s.replayCh:
+			s.runReplay()
+		}
+	}
+}
+
+// runReplay drains the durable log from the stream's cursor to the head,
+// delivering every row. REST failures retry with capped backoff — streams
+// never terminally error. Loops while further replays were queued during
+// the run.
+func (s *RealmFillWatchStream) runReplay() {
+	for {
+		s.fmu.Lock()
+		s.replayQueued = false
+		s.replaying = true
+		local := s.cursor
+		s.fmu.Unlock()
+
+		backoff := time.Second
+		for !s.IsClosed() {
+			resp, err := s.arca.ListRealmFills(context.Background(), &ListRealmFillsOptions{
+				Order:  "asc",
+				Cursor: local,
+				Limit:  realmFillsPageLimit,
+			})
+			if err != nil {
+				s.setState(WatchReconnecting)
+				select {
+				case <-s.stopCh:
+					return
+				case <-time.After(backoff):
+				}
+				if backoff *= 2; backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+				continue
+			}
+			backoff = time.Second
+			for i := range resp.Fills {
+				f := resp.Fills[i]
+				s.deliver(f, encodeRealmFillCursor(f.CreatedAt, f.ID), true)
+			}
+			if resp.Cursor != "" {
+				// Ascending pages always carry the resume position (echoed
+				// on an empty page), which also skips over trailing
+				// non-fill ledger rows the server filtered out.
+				local = resp.Cursor
+			}
+			if len(resp.Fills) < realmFillsPageLimit {
+				break // head of the log reached
+			}
+		}
+
+		s.fmu.Lock()
+		if local != "" {
+			s.cursor = local
+		}
+		s.replaying = false
+		again := s.replayQueued && !s.IsClosed()
+		s.fmu.Unlock()
+		if !again {
+			return
+		}
+	}
+}
+
+// fillFromRecordedEvent maps a fill.recorded event payload to the Fill shape
+// the REST listings return, so live-tail and replayed deliveries are
+// interchangeable. The event's EntityID is the owning exchange object.
+func fillFromRecordedEvent(ev RealmEvent) Fill {
+	sf := ev.Fill
+	realized := ""
+	if sf.RealizedPnl != nil {
+		realized = *sf.RealizedPnl
+	}
+	return Fill{
+		ID:                sf.ID,
+		OperationID:       sf.OperationID,
+		FillID:            sf.FillID,
+		ObjectID:          ev.EntityID,
+		OrderOperationID:  sf.OrderOperationID,
+		OrderID:           sf.OrderID,
+		Market:            sf.Market,
+		Side:              sf.Side,
+		Size:              sf.Size,
+		Price:             sf.Price,
+		Direction:         sf.Direction,
+		StartPosition:     sf.StartPosition,
+		Fee:               sf.Fee,
+		ExchangeFee:       sf.ExchangeFee,
+		PlatformFee:       sf.PlatformFee,
+		BuilderFee:        sf.BuilderFee,
+		RealizedPnl:       realized,
+		ResultingPosition: sf.ResultingPosition,
+		IsLiquidation:     sf.IsLiquidation,
+		CreatedAt:         sf.CreatedAt,
+		IsTrigger:         sf.IsTrigger,
+		Tpsl:              sf.Tpsl,
+		TriggerPx:         sf.TriggerPx,
+		LiquidationKind:   sf.LiquidationKind,
+	}
 }
 
 // FundingWatchStream streams funding payment events for an exchange object.

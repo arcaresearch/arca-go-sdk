@@ -442,6 +442,30 @@ type ListFillsOptions struct {
 	Cursor    string
 }
 
+// ListRealmFillsOptions configures ListRealmFills, the realm-wide fills
+// listing spanning every exchange object in the realm.
+type ListRealmFillsOptions struct {
+	Market    string
+	StartTime string
+	EndTime   string
+	Limit     int
+	// Cursor is the opaque keyset position to resume from — persist the
+	// response's Cursor and pass it back to continue where you left off.
+	Cursor string
+	// Order is "asc" (default — durable-log replay order: everything after
+	// the cursor, oldest first) or "desc" (history-UI order, newest first).
+	Order string
+}
+
+// WatchRealmFillsOptions configures WatchRealmFills.
+type WatchRealmFillsOptions struct {
+	// FromCursor resumes the stream from a previously persisted cursor:
+	// every fill recorded after that position is replayed from the durable
+	// log before the live tail takes over. Empty starts at the head of the
+	// log — only fills recorded after the stream opens are delivered.
+	FromCursor string
+}
+
 type TradeSummaryOptions struct {
 	StartTime string
 	EndTime   string

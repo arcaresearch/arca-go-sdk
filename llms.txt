@@ -102,6 +102,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Position TP/SL | client.SetStopLoss / SetTakeProfit / SetPositionTpsl / ClearPositionTpsl |
 | Open with atomic bracket | client.OpenWithBracket(ctx, OpenBracketOptions{...}) → OpenBracketResult{Entry, TakeProfit?, StopLoss?} |
 | List positions/orders/fills | client.ListPositions / ListOrders / ListFills |
+| Realm-wide fills (all objects) | client.ListRealmFills(ctx, *ListRealmFillsOptions{Market?, StartTime?, EndTime?, Limit?, Cursor?, Order "asc"(default)\|"desc"}) — no object id; each Fill carries ObjectID; asc + cursor = durable replayable log (cursor echoed unchanged on empty page) |
 | Fill trigger context (self-describing) | Fill.IsTrigger (*bool: non-nil false = known regular order; nil = unattributable — external trade/liquidation), Fill.Tpsl "tp"\|"sl", Fill.TriggerPx — decorated server-side, no per-fill order lookup needed. Liquidation fills carry Fill.LiquidationKind "liquidation"\|"adl" (empty on pre-stamp liquidations). |
 | Exchange state | client.GetExchangeState(ctx, id) |
 | Active asset data | client.GetActiveAssetData(ctx, id, coin, applicationFeeTenthsBps, leverage); MaxBuySize/MaxSellSize include reversing and split as MaxBuyReduceSize + MaxBuyOpenSize (same for sell) — the reduce leg is never refused for balance, the open leg is what buying power gates. Empty on Hyperliquid. |
@@ -145,11 +146,20 @@ State(), OnStateChange, Close().
 | client.WatchAggregation(ctx, sources) | PathAggregation |
 | client.WatchExchangeState(ctx, id) | ExchangeState |
 | client.WatchFills(ctx, id, opts) | Fill |
+| client.WatchRealmFills(ctx, *WatchRealmFillsOptions{FromCursor}) | RealmFillUpdate{Fill, Cursor, Replayed} |
 | client.WatchFunding(ctx, id) | FundingPayment |
 | client.WatchCandles(ctx, coins, intervals) | CandleUpdate |
 | client.WatchOI(ctx, coins, intervals) | OIUpdate |
 | client.WatchTrades(ctx, coins) | MarketTrade |
 | client.WatchTwap(ctx, exchangeId, opId) | Twap |
+
+WatchRealmFills is the realm-wide at-least-once fill stream: catch-up from
+the durable log (ListRealmFills asc) from FromCursor, then live fill.recorded
+tail; replays from its cursor on gap/reconnect/resync. Contract: persist
+u.Cursor after processing, pass back as FromCursor on restart; process
+idempotently keyed on Fill.ID (duplicates possible, loss never). Empty
+FromCursor starts from now (no history). Delivery starts on first
+OnUpdate/Updates/Ready attach.
 
 Aggregation sources: arca.NewPrefixSource(p), NewPathsSource(paths),
 NewPatternSource(p), NewWatchSource(id).

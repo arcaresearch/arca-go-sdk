@@ -192,6 +192,23 @@ type SimFill struct {
 	IsLiquidation bool      `json:"isLiquidation"`
 	CreatedAt     string    `json:"createdAt,omitempty"`
 	IsOptimistic  bool      `json:"isOptimistic,omitempty"`
+
+	// The fields below are present on recorded fills (the fill.recorded
+	// event payload mirrors the REST FillResponse shape) and absent on
+	// venue-level previews. They are what lets WatchRealmFills translate a
+	// live event into the same Fill (and cursor position) a REST replay of
+	// the durable log would produce.
+	OperationID       string                 `json:"operationId,omitempty"`
+	FillID            string                 `json:"fillId,omitempty"`
+	OrderOperationID  string                 `json:"orderOperationId,omitempty"`
+	Direction         string                 `json:"direction,omitempty"`
+	StartPosition     string                 `json:"startPosition,omitempty"`
+	ExchangeFee       string                 `json:"exchangeFee,omitempty"`
+	ResultingPosition *FillResultingPosition `json:"resultingPosition,omitempty"`
+	IsTrigger         *bool                  `json:"isTrigger,omitempty"`
+	Tpsl              string                 `json:"tpsl,omitempty"`
+	TriggerPx         string                 `json:"triggerPx,omitempty"`
+	LiquidationKind   string                 `json:"liquidationKind,omitempty"`
 }
 
 type SimOrderWithFills struct {
@@ -217,9 +234,14 @@ type FillResultingPosition struct {
 }
 
 type Fill struct {
-	ID                string                 `json:"id"`
-	OperationID       string                 `json:"operationId,omitempty"`
-	FillID            string                 `json:"fillId,omitempty"`
+	ID          string `json:"id"`
+	OperationID string `json:"operationId,omitempty"`
+	FillID      string `json:"fillId,omitempty"`
+	// ObjectID is the exchange arca object the fill belongs to. Populated on
+	// the realm-wide listing (ListRealmFills) and on WatchRealmFills
+	// deliveries; the per-object ListFills omits it (the caller already
+	// knows the object).
+	ObjectID          string                 `json:"objectId,omitempty"`
 	OrderOperationID  string                 `json:"orderOperationId,omitempty"`
 	OrderID           string                 `json:"orderId,omitempty"`
 	Market            string                 `json:"market"`
