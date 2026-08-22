@@ -237,6 +237,23 @@ type Fill struct {
 	IsLiquidation     bool                   `json:"isLiquidation,omitempty"`
 	CreatedAt         string                 `json:"createdAt"`
 	IsOptimistic      bool                   `json:"isOptimistic,omitempty"`
+
+	// IsTrigger reports whether the originating order was a trigger (TP/SL)
+	// order, decorated server-side from the order operation. A non-nil
+	// false means "known regular order"; nil means the fill is
+	// unattributable (external trade, liquidation) — absence and falseness
+	// are distinct.
+	IsTrigger *bool `json:"isTrigger,omitempty"`
+	// Tpsl is the trigger kind ("tp" | "sl") of the originating order.
+	// Present only for trigger orders.
+	Tpsl string `json:"tpsl,omitempty"`
+	// TriggerPx is the trigger price of the originating order. Present
+	// only for trigger orders.
+	TriggerPx string `json:"triggerPx,omitempty"`
+	// LiquidationKind classifies an IsLiquidation fill: "liquidation"
+	// (margin call) or "adl" (backstop / auto-deleverage close). Empty on
+	// liquidations recorded before the venue method was stamped.
+	LiquidationKind string `json:"liquidationKind,omitempty"`
 }
 
 type FillListResponse struct {
