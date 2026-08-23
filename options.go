@@ -92,8 +92,18 @@ type UpdateLabelsOptions struct {
 }
 
 type UpdateFolderLabelsOptions struct {
-	Path   string
+	Path string
+	// Labels is the folder's complete label set — this is a full
+	// overwrite, not a merge. An empty map deletes all labels.
 	Labels map[string]string
+}
+
+type PatchFolderLabelsOptions struct {
+	Path string
+	// Labels is a per-key delta: a non-nil pointer sets the key, a nil
+	// pointer removes it, and an absent key is left untouched. An empty
+	// map changes nothing.
+	Labels map[string]*string
 }
 
 type ListObjectsOptions struct {

@@ -226,7 +226,12 @@ func (a *Arca) GetFolderLabels(ctx context.Context, path string) (FolderLabelsRe
 	return out, err
 }
 
-// UpdateFolderLabels replaces the label set on a folder path (full overwrite).
+// UpdateFolderLabels replaces the label set on a folder path (full
+// overwrite). An empty map deletes every label on the folder.
+//
+// Prefer PatchFolderLabels when you only mean to change some of the
+// keys — a full overwrite drops any label another part of your system
+// wrote.
 func (a *Arca) UpdateFolderLabels(ctx context.Context, opts UpdateFolderLabelsOptions) (FolderLabelsResponse, error) {
 	var out FolderLabelsResponse
 	if err := validatePath(opts.Path); err != nil {
@@ -237,6 +242,34 @@ func (a *Arca) UpdateFolderLabels(ctx context.Context, opts UpdateFolderLabelsOp
 		return out, err
 	}
 	err = a.client.put(ctx, "/folders/labels", map[string]any{
+		"realmId": rid,
+		"path":    opts.Path,
+		"labels":  opts.Labels,
+	}, &out)
+	return out, err
+}
+
+// PatchFolderLabels merges a per-key delta into a folder's labels: a
+// non-nil value pointer sets the key, a nil pointer removes it, and any
+// key absent from the map keeps its current value. An empty map is a
+// no-op; removing the last key deletes the folder's label row.
+//
+// The server merges inside one transaction, so concurrent writes to
+// different keys both land — unlike a read-then-UpdateFolderLabels
+// round trip, where the later write clobbers the earlier one.
+//
+// Validation runs on the merged result, so a one-key patch can still be
+// rejected for pushing the folder past the 32-key ceiling.
+func (a *Arca) PatchFolderLabels(ctx context.Context, opts PatchFolderLabelsOptions) (FolderLabelsResponse, error) {
+	var out FolderLabelsResponse
+	if err := validatePath(opts.Path); err != nil {
+		return out, err
+	}
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.patch(ctx, "/folders/labels", nil, map[string]any{
 		"realmId": rid,
 		"path":    opts.Path,
 		"labels":  opts.Labels,

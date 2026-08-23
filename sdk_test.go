@@ -595,6 +595,84 @@ func TestUpdateIsolatedMargin_PostsToEndpoint(t *testing.T) {
 	}
 }
 
+// TestPatchFolderLabels_SendsKeyDelta pins the merge wire contract: a
+// PATCH carrying only the keys the caller means to change, with an
+// explicit null for a removal. The full-overwrite PUT sibling would
+// drop every key absent from the body, so the method and the body shape
+// have to stay as written.
+func TestPatchFolderLabels_SendsKeyDelta(t *testing.T) {
+	var gotMethod, gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		writeEnvelope(w, 200, FolderLabelsResponse{
+			RealmID: "rlm_01h2xcejqtf2nbrexx3vqjhp41",
+			Path:    "/users/alice",
+			Labels:  map[string]string{"name": "Alice", "gobi.privacy": "private"},
+		})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	private := "private"
+	resp, err := a.PatchFolderLabels(context.Background(), PatchFolderLabelsOptions{
+		Path:   "/users/alice",
+		Labels: map[string]*string{"gobi.privacy": &private, "stale": nil},
+	})
+	if err != nil {
+		t.Fatalf("PatchFolderLabels: %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("method = %s, want PATCH", gotMethod)
+	}
+	if gotPath != "/api/v1/folders/labels" {
+		t.Errorf("path = %s", gotPath)
+	}
+	if gotBody["path"] != "/users/alice" || gotBody["realmId"] != "rlm_01h2xcejqtf2nbrexx3vqjhp41" {
+		t.Errorf("body = %+v", gotBody)
+	}
+	labels, ok := gotBody["labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("labels not an object: %+v", gotBody["labels"])
+	}
+	if labels["gobi.privacy"] != "private" {
+		t.Errorf("set key = %v, want private", labels["gobi.privacy"])
+	}
+	// A removal must serialize as an explicit null, not be dropped —
+	// an omitted key means "leave untouched" on the server.
+	if v, present := labels["stale"]; !present || v != nil {
+		t.Errorf("removal key = %v (present=%v), want explicit null", v, present)
+	}
+	// The response carries the merged set, including keys the caller
+	// never mentioned.
+	if resp.Labels["name"] != "Alice" || resp.Labels["gobi.privacy"] != "private" {
+		t.Errorf("resp labels = %+v", resp.Labels)
+	}
+}
+
+func TestPatchFolderLabels_RejectsInvalidPath(t *testing.T) {
+	var called int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&called, 1)
+		writeEnvelope(w, 200, FolderLabelsResponse{})
+	}))
+	defer srv.Close()
+
+	a := newTestArca(t, srv.URL)
+	v := "b"
+	if _, err := a.PatchFolderLabels(context.Background(), PatchFolderLabelsOptions{
+		Path:   "users/alice",
+		Labels: map[string]*string{"a": &v},
+	}); err == nil {
+		t.Fatal("expected validation error for a relative path")
+	}
+	if atomic.LoadInt32(&called) != 0 {
+		t.Errorf("invalid path must not reach the API, got %d calls", called)
+	}
+}
+
 func TestSetMarginMode_PostsToEndpoint(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any

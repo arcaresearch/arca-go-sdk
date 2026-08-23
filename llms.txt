@@ -75,6 +75,10 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Get object | client.GetObject(ctx, path) / GetObjectDetail(ctx, id) |
 | List objects | client.ListObjects(ctx, *ListObjectsOptions) |
 | Browse objects | client.BrowseObjects(ctx, *BrowseObjectsOptions) |
+| Object labels (merge) | client.UpdateLabels(ctx, UpdateLabelsOptions{ObjectID, Labels map[string]*string}) — nil pointer removes a key |
+| Read folder labels | client.GetFolderLabels(ctx, path) |
+| Set folder labels (overwrite) | client.UpdateFolderLabels(ctx, UpdateFolderLabelsOptions{Path, Labels map[string]string}) — full overwrite; empty map deletes all |
+| Merge folder labels (delta) | client.PatchFolderLabels(ctx, PatchFolderLabelsOptions{Path, Labels map[string]*string}) — nil pointer removes a key, unmentioned keys untouched |
 | Balances | client.GetBalances(ctx, id) / GetBalancesByPath(ctx, path) |
 | Transfer | client.Transfer(ctx, TransferOptions{Path, From, To, Amount}) |
 | Fund (dev) | client.FundAccount(ctx, FundAccountOptions{ArcaRef, Amount}) |
@@ -216,6 +220,10 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 4. FundAccount/DefundAccount are dev-only; use CreatePaymentLink in production.
 5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
 6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage when opening/increasing on PlaceOrder; a ReduceOnly close/trim is accepted without Leverage (uses the position's current leverage, never re-margins). Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
+
+## Folder labels: PatchFolderLabels merges, UpdateFolderLabels overwrites
+
+Folders are virtual aggregations of arca paths, so folder labels live in their own store keyed by (realmId, path) and are surfaced inline on BrowseObjects rows. Three operations: GetFolderLabels reads the current set (empty map when none are set); UpdateFolderLabels REPLACES the whole set (an empty map deletes every label); PatchFolderLabels MERGES a per-key delta (nil pointer removes a key, unmentioned keys keep their value, an empty map is a no-op, removing the last key deletes the row). Prefer PatchFolderLabels whenever you mean to change some keys rather than define all of them — e.g. flipping a projection privacy label on a user folder. The server merges inside one transaction, so two concurrent single-key writes both land; a read-then-UpdateFolderLabels round trip loses whichever write commits first. Validation (32 keys, key grammar `^[a-zA-Z][a-zA-Z0-9._-]*$`, `arca.`/`_` reserved prefixes, 256-char values) runs on the MERGED result, so a one-key patch can still be rejected for pushing the folder past the ceiling.
 
 ## TP/SL is an OCO bracket; cancelled orders carry a reason
 
