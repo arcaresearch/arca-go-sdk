@@ -757,7 +757,14 @@ func (a *Arca) WatchRealmFills(ctx context.Context, opts *WatchRealmFillsOptions
 	}
 
 	a.ws.EnsureConnected()
-	go func() { _, _ = a.ws.watchPath(context.Background(), "/") }()
+	// Subscribe by event TYPE, not by watching "/". A realm-root path watch
+	// makes the server assemble a full-realm snapshot (every balance, every
+	// operation, a valuations map) and hold a realm-wide valuation watch
+	// that re-derives on every balance change in the realm — all of which
+	// this stream discards, since it wants fill.recorded and nothing else.
+	// Type-routed delivery is not an authorization widening: the server
+	// still applies the per-event scope backstop.
+	a.ws.subscribeEvents([]string{string(EventFillRecorded)})
 	s.addUnsub(a.ws.OnFillRecorded(s.onLiveFill))
 	// Both loss signals funnel into the same recovery: replay the durable
 	// log from the last cursor. OnGap covers observed deliverySeq holes and
@@ -765,7 +772,7 @@ func (a *Arca) WatchRealmFills(ctx context.Context, opts *WatchRealmFillsOptions
 	// (everything during the outage was lost without a gap to observe).
 	s.addUnsub(a.ws.OnGap(func(int64) { s.scheduleReplay() }))
 	s.addUnsub(a.ws.OnAuthenticated(func() { s.scheduleReplay() }))
-	s.addUnsub(func() { a.ws.unwatchPath("/") })
+	s.addUnsub(func() { a.ws.unsubscribeEvents([]string{string(EventFillRecorded)}) })
 	s.addUnsub(func() { close(s.stopCh) })
 	// The initial catch-up (which also closes the seam between the
 	// head-seed read above and the live subscription) is scheduled by

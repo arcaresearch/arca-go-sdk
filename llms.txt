@@ -162,7 +162,10 @@ State(), OnStateChange, Close().
 
 WatchRealmFills is the realm-wide at-least-once fill stream: catch-up from
 the durable log (ListRealmFills asc) from FromCursor, then live fill.recorded
-tail; replays from its cursor on gap/reconnect/resync. Contract: persist
+tail; replays from its cursor on gap/reconnect/resync. It subscribes by event
+TYPE (subscribe_events), not by watching "/" — a realm-root path watch makes
+the server assemble a full-realm snapshot and hold a realm-wide valuation
+watch this stream discards. Contract: persist
 u.Cursor after processing, pass back as FromCursor on restart; process
 idempotently keyed on Fill.ID (duplicates possible, loss never). Empty
 FromCursor starts from now (no history). Delivery starts on first

@@ -212,14 +212,25 @@ func normalizeV2PnlHistory(path, from, to string, resp v2PnlHistoryResponse) Pnl
 
 // CreateAggregationWatch creates a server-side aggregation watch over a set of
 // sources, returning the watch id and the initial aggregation.
+//
+// The watch is registered on this client's WebSocket before returning.
+// Delivery is ownership-gated server-side — a connection receives
+// aggregation.updated only for watches it registered — so without that step
+// this would create a watch that never emits. Prefer WatchAggregation, which
+// manages the whole lifecycle including reconnect recreation.
 func (a *Arca) CreateAggregationWatch(ctx context.Context, sources []AggregationSource) (CreateWatchResponse, error) {
 	var out CreateWatchResponse
 	rid, err := a.realmID(ctx)
 	if err != nil {
 		return out, err
 	}
-	err = a.client.post(ctx, "/aggregations/watch", map[string]any{"realmId": rid, "sources": sources}, &out)
-	return out, err
+	if err = a.client.post(ctx, "/aggregations/watch", map[string]any{"realmId": rid, "sources": sources}, &out); err != nil {
+		return out, err
+	}
+	if out.WatchID != "" && a.ws != nil {
+		a.ws.attachAggregationWatch(string(out.WatchID))
+	}
+	return out, nil
 }
 
 // GetWatchAggregation returns the current aggregation for a watch.
@@ -238,6 +249,9 @@ func (a *Arca) GetWatchAggregation(ctx context.Context, watchID string) (PathAgg
 func (a *Arca) DestroyAggregationWatch(ctx context.Context, watchID string) error {
 	if err := a.ensureReady(ctx); err != nil {
 		return err
+	}
+	if a.ws != nil {
+		a.ws.detachAggregationWatch(watchID)
 	}
 	return a.client.delete(ctx, "/aggregations/watch/"+watchID, nil)
 }

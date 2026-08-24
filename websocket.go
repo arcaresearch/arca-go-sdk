@@ -117,6 +117,18 @@ type WebSocketManager struct {
 
 	chartWatches map[string]chartWatchReq
 
+	// attachedWatches holds watches created out-of-band (REST
+	// POST /aggregations/watch) that this connection registered for
+	// delivery. Delivery is ownership-gated server-side, so these must be
+	// re-attached on every reconnect or the watch goes silent.
+	attachedWatches map[string]struct{}
+
+	// eventTypeSubs holds realm event types subscribed by TYPE rather than
+	// by path, so a consumer of one event class does not have to watch "/"
+	// (which drags a full-realm snapshot and a realm-wide valuation watch
+	// behind it). Re-issued on every reconnect.
+	eventTypeSubs map[string]struct{}
+
 	pending   map[string]pendingRequest
 	nextReqID int
 
@@ -603,6 +615,14 @@ func (m *WebSocketManager) resubscribe(conn *websocket.Conn) {
 	for k, v := range m.chartWatches {
 		chartWatches[k] = v
 	}
+	var attached []string
+	for id := range m.attachedWatches {
+		attached = append(attached, id)
+	}
+	var eventTypes []string
+	for t := range m.eventTypeSubs {
+		eventTypes = append(eventTypes, t)
+	}
 	m.mu.Unlock()
 
 	if midsOK {
@@ -630,6 +650,15 @@ func (m *WebSocketManager) resubscribe(conn *websocket.Conn) {
 	}
 	for watchID, req := range chartWatches {
 		_ = m.writeJSON(conn, map[string]any{"action": "watch_chart_history", "watchId": watchID, "target": req.target, "kind": req.kind, "objectId": req.objectID})
+	}
+	// Re-register watches created out-of-band over REST. The registry is
+	// per-pod, so a reconnect that lands elsewhere answers "unknown watch"
+	// — the watch is genuinely gone there and the owner recreates it.
+	for _, watchID := range attached {
+		_ = m.writeJSON(conn, map[string]any{"action": "attach_aggregation_watch", "watchId": watchID})
+	}
+	if len(eventTypes) > 0 {
+		_ = m.writeJSON(conn, map[string]any{"action": "subscribe_events", "types": eventTypes})
 	}
 }
 
@@ -1538,7 +1567,76 @@ func (m *WebSocketManager) createAggregationWatch(ctx context.Context, sources [
 }
 
 func (m *WebSocketManager) destroyAggregationWatch(watchID string) {
+	m.mu.Lock()
+	delete(m.attachedWatches, watchID)
+	m.mu.Unlock()
 	m.send(map[string]any{"action": "destroy_aggregation_watch", "watchId": watchID})
+}
+
+// attachAggregationWatch registers a watch created out-of-band (REST
+// POST /aggregations/watch) for delivery on this connection.
+//
+// Delivery is ownership-gated server-side: a connection receives
+// aggregation.updated only for watches it registered. Without this call a
+// REST-created watch produces no events. The server re-authorizes the
+// watch's sources against this connection's credential, so attaching can
+// never widen access.
+func (m *WebSocketManager) attachAggregationWatch(watchID string) {
+	if watchID == "" {
+		return
+	}
+	m.mu.Lock()
+	if m.attachedWatches == nil {
+		m.attachedWatches = map[string]struct{}{}
+	}
+	m.attachedWatches[watchID] = struct{}{}
+	m.mu.Unlock()
+	m.EnsureConnected()
+	m.sendWhenConnected(map[string]any{"action": "attach_aggregation_watch", "watchId": watchID})
+}
+
+// detachAggregationWatch stops delivery on this connection without
+// destroying the watch.
+func (m *WebSocketManager) detachAggregationWatch(watchID string) {
+	if watchID == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.attachedWatches, watchID)
+	m.mu.Unlock()
+	m.send(map[string]any{"action": "detach_aggregation_watch", "watchId": watchID})
+}
+
+// subscribeEvents asks for realm events by TYPE, with no path watch. The
+// server still applies the per-event scope backstop, so this widens which
+// events arrive, never whose.
+func (m *WebSocketManager) subscribeEvents(types []string) {
+	if len(types) == 0 {
+		return
+	}
+	m.mu.Lock()
+	if m.eventTypeSubs == nil {
+		m.eventTypeSubs = map[string]struct{}{}
+	}
+	for _, t := range types {
+		m.eventTypeSubs[t] = struct{}{}
+	}
+	m.mu.Unlock()
+	m.EnsureConnected()
+	m.sendWhenConnected(map[string]any{"action": "subscribe_events", "types": types})
+}
+
+// unsubscribeEvents drops type-routed delivery for the given types.
+func (m *WebSocketManager) unsubscribeEvents(types []string) {
+	if len(types) == 0 {
+		return
+	}
+	m.mu.Lock()
+	for _, t := range types {
+		delete(m.eventTypeSubs, t)
+	}
+	m.mu.Unlock()
+	m.send(map[string]any{"action": "unsubscribe_events", "types": types})
 }
 
 func (m *WebSocketManager) createChartHistoryWatch(ctx context.Context, target, kind, objectID string) (string, error) {
