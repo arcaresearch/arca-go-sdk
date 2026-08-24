@@ -75,6 +75,9 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Get object | client.GetObject(ctx, path) / GetObjectDetail(ctx, id) |
 | List objects | client.ListObjects(ctx, *ListObjectsOptions) |
 | Browse objects | client.BrowseObjects(ctx, *BrowseObjectsOptions) |
+| Create isolation zone | client.CreateIsolationZone(ctx, CreateIsolationZoneOptions{Path}) |
+| List isolation zones | client.ListIsolationZones(ctx, *ListIsolationZonesOptions{Prefix}) — active only; Prefix is a raw path prefix |
+| Archive isolation zone | client.ArchiveIsolationZone(ctx, ArchiveIsolationZoneOptions{Path, Reason}) — the inverse of create; zone must be empty (no objects under its path, no balances owed against its boundary, nothing on chain) or it is refused 412 DELETION_BLOCKED naming what remains. Idempotent, no step-up, no force flag. Keeps the on-chain boundary so historical operations still resolve; operator-reversible |
 | Object labels (merge) | client.UpdateLabels(ctx, UpdateLabelsOptions{ObjectID, Labels map[string]*string}) — nil pointer removes a key |
 | Read folder labels | client.GetFolderLabels(ctx, path) |
 | Set folder labels (overwrite) | client.UpdateFolderLabels(ctx, UpdateFolderLabelsOptions{Path, Labels map[string]string}) — full overwrite; empty map deletes all |

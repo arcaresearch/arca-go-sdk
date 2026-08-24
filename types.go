@@ -183,6 +183,19 @@ type IsolationZone struct {
 	// needs RegisterRecoveryKey — which is also the answer for every zone
 	// created without asking for one.
 	RecoveryKey string `json:"recoveryKey,omitempty"`
+	// ArchivedAt is set only on a soft-archived zone. Archiving is a metadata
+	// marker — the on-chain boundary is retained permanently — so an archived
+	// zone still resolves for historical operations while being excluded from
+	// new object creation and from active listings.
+	ArchivedAt *string `json:"archivedAt,omitempty"`
+	// ArchivedReason records why the zone was retired, if it was.
+	ArchivedReason string `json:"archivedReason,omitempty"`
+}
+
+// IsolationZoneList is the active-zone listing for a realm.
+type IsolationZoneList struct {
+	RealmID string          `json:"realmId"`
+	Zones   []IsolationZone `json:"zones"`
 }
 
 type EnsureArcaObjectResponse struct {

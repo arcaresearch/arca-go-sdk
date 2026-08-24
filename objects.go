@@ -200,6 +200,59 @@ func (a *Arca) CreateIsolationZone(ctx context.Context, opts CreateIsolationZone
 	return out, err
 }
 
+// ListIsolationZones returns the realm's active isolation zones, optionally
+// narrowed to a path prefix. Archived zones are not returned.
+func (a *Arca) ListIsolationZones(ctx context.Context, opts *ListIsolationZonesOptions) (IsolationZoneList, error) {
+	var out IsolationZoneList
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	params := url.Values{"realmId": {rid}}
+	if opts != nil && opts.Prefix != "" {
+		if err := validatePath(opts.Prefix); err != nil {
+			return out, err
+		}
+		params.Set("prefix", opts.Prefix)
+	}
+	err = a.client.get(ctx, "/isolation-zones", params, &out)
+	return out, err
+}
+
+// ArchiveIsolationZone retires an isolation zone you no longer need — the
+// inverse of CreateIsolationZone, and how a workflow that creates a zone per
+// run avoids accumulating a live boundary for every run it has ever done.
+//
+// The zone must be empty: no objects under its path, no balances owed against
+// its boundary, and nothing left on chain. A zone that still holds any of
+// those is refused rather than archived, so drain and delete first. Emptiness
+// is what makes this safe, so there is no way to override the check.
+//
+// Archiving is reversible by an operator and does not remove the on-chain
+// boundary — historical operations still resolve. Calling it on an
+// already-archived zone succeeds and returns the existing zone, so a teardown
+// can retry freely.
+func (a *Arca) ArchiveIsolationZone(ctx context.Context, opts ArchiveIsolationZoneOptions) (IsolationZone, error) {
+	var out IsolationZone
+	if err := validatePath(opts.Path); err != nil {
+		return out, err
+	}
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	path := opts.Path
+	if path != "/" {
+		path = trimTrailingSlash(path)
+	}
+	body := map[string]any{"realmId": rid, "path": path}
+	if opts.Reason != "" {
+		body["reason"] = opts.Reason
+	}
+	err = a.client.post(ctx, "/isolation-zones/archive", body, &out)
+	return out, err
+}
+
 // UpdateLabels updates labels on an Arca object. A nil value pointer removes a key.
 func (a *Arca) UpdateLabels(ctx context.Context, opts UpdateLabelsOptions) (ArcaObject, error) {
 	var out ArcaObject

@@ -132,6 +132,21 @@ type CreateIsolationZoneOptions struct {
 	RecoveryKey string
 }
 
+type ListIsolationZonesOptions struct {
+	// Prefix restricts the listing to zones at or under this path. It is a
+	// raw path prefix, so pass the full subtree you own ("/tenants/acme")
+	// rather than a partial segment. Empty lists every active zone.
+	Prefix string
+}
+
+type ArchiveIsolationZoneOptions struct {
+	// Path of the zone to retire.
+	Path string
+	// Reason is an optional note recorded on the zone for whoever reads it
+	// later.
+	Reason string
+}
+
 type ListOperationsOptions struct {
 	Type           OperationType
 	Types          []OperationType
