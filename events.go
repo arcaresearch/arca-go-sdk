@@ -17,6 +17,19 @@ const (
 	// EventBalanceUpdated is still what says they landed.
 	EventDepositDetected EventType = "deposit.detected"
 	EventExchangeUpdated EventType = "exchange.updated"
+	// EventExchangeProvisioned fires when an exchange arca's venue account
+	// exists and its metadata is stamped — the point at which the object stops
+	// answering 503 EXCHANGE_PROVISIONING. It does NOT always mean the account
+	// can trade: on a cosign-armed boundary the trading agent still needs the
+	// user's co-signature, which ExchangeProvisioning.CosignRequired reports and
+	// EventExchangeReady marks.
+	EventExchangeProvisioned EventType = "exchange.provisioned"
+	// EventExchangeReady fires when the trading agent is registered on chain and
+	// the account can actually trade. On an unarmed boundary it follows
+	// EventExchangeProvisioned immediately; on an armed one it waits for the
+	// user's co-signed agent grant, which may be minutes or days. Treat the gap
+	// as waiting on the user, not as a stall.
+	EventExchangeReady EventType = "exchange.ready"
 	// EventFillPreviewed is Phase 1 of two-phase fill delivery: the instant,
 	// incomplete venue-level fill echo. EventFillRecorded (Phase 2) follows with
 	// the authoritative record; the SDK merges the pair by correlationId.
@@ -77,6 +90,9 @@ type RealmEvent struct {
 	ExchangeState *ExchangeState   `json:"exchangeState,omitempty"`
 	Valuation     *ObjectValuation `json:"valuation,omitempty"`
 
+	// Exchange is present on EventExchangeProvisioned and EventExchangeReady.
+	Exchange *ExchangeProvisioning `json:"exchange,omitempty"`
+
 	Balances     []ArcaBalance     `json:"balances,omitempty"`
 	HeldOutbound []ReservedBalance `json:"heldOutbound,omitempty"`
 	HeldInbound  []ReservedBalance `json:"heldInbound,omitempty"`
@@ -115,6 +131,28 @@ type RealmEvent struct {
 	Sequence      int64  `json:"sequence,omitempty"`
 	Timestamp     string `json:"timestamp,omitempty"`
 	DeliverySeq   int64  `json:"deliverySeq,omitempty"`
+}
+
+// ExchangeProvisioning is what an exchange arca reports about its own
+// provisioning, carried on EventExchangeProvisioned and EventExchangeReady.
+//
+// Creating an exchange arca returns as soon as the object exists, which is
+// before its venue account does; until then, trading calls answer 503
+// EXCHANGE_PROVISIONING. These two events are how you learn that changed
+// without polling for it.
+type ExchangeProvisioning struct {
+	ObjectID string `json:"objectId,omitempty"`
+	Path     string `json:"path,omitempty"`
+	// CosignRequired reports that the boundary is cosign-armed, so the account
+	// exists but cannot trade until the user co-signs the agent grant. Expect
+	// EventExchangeReady once they do.
+	CosignRequired bool `json:"cosignRequired,omitempty"`
+	// Tradable is true when the account can actually trade. Always true on
+	// EventExchangeReady.
+	Tradable bool `json:"tradable,omitempty"`
+	// AccountAddress is the venue account address, once stamped.
+	AccountAddress string `json:"accountAddress,omitempty"`
+	AgentWalletID  string `json:"agentWalletId,omitempty"`
 }
 
 // DetectedDeposit is money observed arriving at a watched deposit address.

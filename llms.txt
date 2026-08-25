@@ -171,6 +171,27 @@ idempotently keyed on Fill.ID (duplicates possible, loss never). Empty
 FromCursor starts from now (no history). Delivery starts on first
 OnUpdate/Updates/Ready attach.
 
+Knowing when an exchange arca can trade: creating one returns before its venue
+account exists, and until it does every trading call answers 503
+EXCHANGE_PROVISIONING. Two events replace polling for it.
+EventExchangeProvisioned ("exchange.provisioned") means the venue account exists
+and its metadata is stamped, so the object stops answering 503.
+EventExchangeReady ("exchange.ready") means the trading agent is registered on
+chain and it can actually trade. Both carry RealmEvent.Exchange
+(*ExchangeProvisioning: ObjectID, Path, CosignRequired, Tradable,
+AccountAddress, AgentWalletID).
+
+They are separate because on a cosign-armed boundary they are separate moments:
+the account is provisioned, but its trading agent needs the user to co-sign a
+grant, so provisioned arrives with CosignRequired=true and ready follows only
+once that grant lands — minutes or days later. Treat the gap as waiting on the
+user, not a stall. On an unarmed boundary both arrive together.
+
+EventDepositDetected ("deposit.detected") is money seen arriving at a watched
+deposit address before it has been swept and become balance;
+RealmEvent.Deposit (*DetectedDeposit) carries it. Chain truth, not ledger truth
+— EventBalanceUpdated is still what says the funds landed.
+
 Aggregation sources: arca.NewPrefixSource(p), NewPathsSource(paths),
 NewPatternSource(p), NewWatchSource(id).
 
