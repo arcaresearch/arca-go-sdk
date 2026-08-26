@@ -149,7 +149,8 @@ prices.OnUpdate(func(m map[string]string) { /* tick */ })
 
 Available: `WatchPrices`, `WatchOperations`, `WatchBalances`, `WatchObject`,
 `WatchObjects`, `WatchAggregation`, `WatchExchangeState`, `WatchFills`,
-`WatchFunding`, `WatchCandles`, `WatchTrades`, `WatchTwap`.
+`WatchRealmFills`, `WatchRealmExchange`, `WatchFunding`, `WatchCandles`,
+`WatchTrades`, `WatchTwap`.
 
 The connection is rotated before the infrastructure's maximum socket lifetime
 severs it: a replacement is warmed alongside the live one and only takes over

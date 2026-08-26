@@ -948,6 +948,139 @@ func fillFromRecordedEvent(ev RealmEvent) Fill {
 	}
 }
 
+// ---- Realm-wide exchange.updated stream (live-tail) ----
+
+// RealmExchangeUpdate is one delivery from RealmExchangeWatchStream.
+type RealmExchangeUpdate struct {
+	ObjectID   string
+	ObjectPath string
+	// State is the serve-path open book (positions include liquidationPrice).
+	// Nil when the event arrived without a snapshot — treat as degraded for
+	// that one object (one GET if you want; this stream will not do it).
+	State *ExchangeState
+	// Resync is true on a delivery gap or reconnect. There is no durable
+	// log for exchange.updated; re-seed the books you already hold. State
+	// is nil on a resync marker.
+	Resync bool
+}
+
+// RealmExchangeWatchStream tails every exchange.updated in the realm.
+// See WatchRealmExchange.
+type RealmExchangeWatchStream struct {
+	*WatchStream[RealmExchangeUpdate]
+
+	emu     sync.Mutex
+	started bool
+	haveAuth bool
+}
+
+// start begins delivery on the first consumer attach so a live event cannot
+// be emitted before anyone is listening (the base stream drops those).
+func (s *RealmExchangeWatchStream) start() {
+	s.emu.Lock()
+	s.started = true
+	s.emu.Unlock()
+}
+
+// OnUpdate registers an update callback and starts delivery on first attach.
+func (s *RealmExchangeWatchStream) OnUpdate(cb func(RealmExchangeUpdate)) func() {
+	unsub := s.WatchStream.OnUpdate(cb)
+	s.start()
+	return unsub
+}
+
+// Updates returns the update channel and starts delivery on first use.
+func (s *RealmExchangeWatchStream) Updates() <-chan RealmExchangeUpdate {
+	s.start()
+	return s.WatchStream.Updates()
+}
+
+// Ready blocks until the first delivery, starting the stream if needed.
+func (s *RealmExchangeWatchStream) Ready(ctx context.Context) error {
+	s.start()
+	return s.WatchStream.Ready(ctx)
+}
+
+// WatchRealmExchange tails exchange.updated across every exchange object
+// in the realm. The wire is the same type-routed subscribe WatchRealmFills
+// uses for fills:
+//
+//	{"action":"subscribe_events","types":["exchange.updated"]}
+//
+// No path watch, no realm snapshot, no valuation firehose.
+// WatchExchangeState is per-object — N of those is a walk with a websocket.
+//
+// Delivery model — live-tail, not catch-up-then-tail:
+//  1. Live events carry the serve-path open book (State), including
+//     liquidationPrice. Rewrite every open row on that account.
+//  2. There is no durable log. A delivery gap or reconnect emits one
+//     update with Resync=true; re-seed the books you already hold
+//     (one GET per object, not a realm walk). This stream never fans
+//     out GetExchangeState.
+//  3. A name-only event (State=nil, Resync=false) is degraded for that
+//     one object — GET it if you want; place/cancel with an unchanged
+//     book can be ignored.
+//
+// Delivery begins when the first consumer attaches (OnUpdate, Updates, or
+// Ready). Events before that attach are dropped.
+//
+// Requires a credential with realm-wide read (arca:ReadObject on "*") and
+// arca:Subscribe.
+func (a *Arca) WatchRealmExchange(ctx context.Context) (*RealmExchangeWatchStream, error) {
+	if err := a.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	s := &RealmExchangeWatchStream{
+		WatchStream: newWatchStream[RealmExchangeUpdate](),
+	}
+	a.ws.EnsureConnected()
+	// Subscribe by event TYPE, not by watching "/". A realm-root path
+	// watch makes the server assemble a full-realm snapshot and hold a
+	// realm-wide valuation watch this stream discards.
+	a.ws.subscribeEvents([]string{string(EventExchangeUpdated)})
+	s.addUnsub(a.ws.OnExchangeNotification(s.onEvent))
+	s.addUnsub(a.ws.OnGap(func(int64) { s.onLoss() }))
+	s.addUnsub(a.ws.OnAuthenticated(s.onAuthenticated))
+	s.addUnsub(func() { a.ws.unsubscribeEvents([]string{string(EventExchangeUpdated)}) })
+	return s, nil
+}
+
+func (s *RealmExchangeWatchStream) onEvent(ev RealmEvent) {
+	s.emu.Lock()
+	started := s.started
+	s.emu.Unlock()
+	if !started {
+		return
+	}
+	s.emit(RealmExchangeUpdate{
+		ObjectID:   ev.EntityID,
+		ObjectPath: ev.EntityPath,
+		State:      ev.ExchangeState,
+	})
+}
+
+func (s *RealmExchangeWatchStream) onAuthenticated() {
+	s.emu.Lock()
+	started := s.started
+	first := !s.haveAuth
+	s.haveAuth = true
+	s.emu.Unlock()
+	if !started || first {
+		return
+	}
+	s.emit(RealmExchangeUpdate{Resync: true})
+}
+
+func (s *RealmExchangeWatchStream) onLoss() {
+	s.emu.Lock()
+	started := s.started
+	s.emu.Unlock()
+	if !started {
+		return
+	}
+	s.emit(RealmExchangeUpdate{Resync: true})
+}
+
 // FundingWatchStream streams funding payment events for an exchange object.
 type FundingWatchStream struct {
 	*WatchStream[FundingPayment]

@@ -154,6 +154,7 @@ State(), OnStateChange, Close().
 | client.WatchExchangeState(ctx, id) | ExchangeState |
 | client.WatchFills(ctx, id, opts) | Fill |
 | client.WatchRealmFills(ctx, *WatchRealmFillsOptions{FromCursor}) | RealmFillUpdate{Fill, Cursor, Replayed} |
+| client.WatchRealmExchange(ctx) | RealmExchangeUpdate{ObjectID, ObjectPath, State, Resync} |
 | client.WatchFunding(ctx, id) | FundingPayment |
 | client.WatchCandles(ctx, coins, intervals) | CandleUpdate |
 | client.WatchOI(ctx, coins, intervals) | OIUpdate |
@@ -170,6 +171,16 @@ u.Cursor after processing, pass back as FromCursor on restart; process
 idempotently keyed on Fill.ID (duplicates possible, loss never). Empty
 FromCursor starts from now (no history). Delivery starts on first
 OnUpdate/Updates/Ready attach.
+
+WatchRealmExchange is the realm-wide live-tail of exchange.updated — the
+no-fill mutations (funding, deposit/withdraw, isolated margin, leverage,
+margin-mode) that fill.recorded does not cover. Same wire as
+WatchRealmFills (subscribe_events, not a path watch of "/"). There is no
+durable log: a gap or reconnect emits Resync=true and the consumer
+re-seeds the books it already holds. Live events carry the serve-path
+open book (State.Positions include liquidationPrice). This stream never
+fans out GetExchangeState. Delivery starts on first OnUpdate/Updates/Ready
+attach. Not mid-driven — exchange.mid_price is a different type.
 
 Knowing when an exchange arca can trade: creating one returns before its venue
 account exists, and until it does every trading call answers 503
