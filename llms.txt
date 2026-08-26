@@ -248,6 +248,40 @@ JWT. The SDK retries once and never persists it. Returning an error surfaces
 5. size is base-asset units, not USD. Min notional is $10 (GetOrderLimits()).
 6. Isolated-only markets (MarginModes == ["isolated"], i.e. deprecated OnlyIsolated) require Isolated:true + positive Leverage when opening/increasing on PlaceOrder; a ReduceOnly close/trim is accepted without Leverage (uses the position's current leverage, never re-margins). Independent of HIP-3 — some HIP-3 markets (e.g. hl:1:TSLA) are cross-eligible.
 
+## Chart history is already marked; `points` is a ceiling
+
+GetEquityHistory and GetPnlHistory are ONE computation — same buckets, same
+marking; P&L history is equity history minus external flows. Every bucket's
+EquityUsd is that bucket's cash valued at that bucket's own mids PLUS
+unrealized P&L on every position open at that bucket, valued at the same mids.
+It is not settled equity carried forward and the marking is not limited to the
+live point, so do NOT rebuild the curve from candles: a rebuild that projects
+the CURRENT position backwards has no term for a closed position, a realized
+loss, or a liquidation, and silently flat-lines the days before the newest
+position. Status describes the CASH side's provenance, not whether the point
+was marked — ChartCarried means no ledger event landed in that bucket, and such
+a point still changes value as the market moves. ChartIncomplete is the
+degradation signal (a mid was missing, or the position overlay could not run).
+Deposits move EquityUsd and never move PnlUsd, so chart EquityUsd (present on
+PnlPoint too) for "what is this account worth".
+
+EquityUsd is FLOORED at zero and the floor never destroys the number. Exchange
+accounts are the one class permitted to hold a negative balance, and a negative
+balance is worse to render than a zero. When the floor clamps a point the true
+signed value comes back as UnflooredEquityUsd; when it does not, that field is
+empty — so its presence is also the only way to tell a floored point from a
+genuinely-zero one. PnlUsd is derived from the UNFLOORED value: a signed
+performance delta must not be flattened by a balance clamp.
+
+`points` is a CEILING: the ladder picks the finest rung whose bucket count fits
+inside it, so a 24h window at points=180 is served at 15m (~96 points). The
+response describes its own grid via Resolution + BucketSeconds, with
+ResolutionRequested set only when coverage forced a promotion. Reconcile two
+sources for the same series by window and resolution — never by "whichever has
+more points", which a client-side reconstruction wins every time regardless of
+correctness. PickResolution/BucketMs/AlignDown make the count predictable
+before the request.
+
 ## Folder labels: PatchFolderLabels merges, UpdateFolderLabels overwrites
 
 Folders are virtual aggregations of arca paths, so folder labels live in their own store keyed by (realmId, path) and are surfaced inline on BrowseObjects rows. Three operations: GetFolderLabels reads the current set (empty map when none are set); UpdateFolderLabels REPLACES the whole set (an empty map deletes every label); PatchFolderLabels MERGES a per-key delta (nil pointer removes a key, unmentioned keys keep their value, an empty map is a no-op, removing the last key deletes the row). Prefer PatchFolderLabels whenever you mean to change some keys rather than define all of them — e.g. flipping a projection privacy label on a user folder. The server merges inside one transaction, so two concurrent single-key writes both land; a read-then-UpdateFolderLabels round trip loses whichever write commits first. Validation (32 keys, key grammar `^[a-zA-Z][a-zA-Z0-9._-]*$`, `arca.`/`_` reserved prefixes, 256-char values) runs on the MERGED result, so a one-key patch can still be rejected for pushing the folder past the ceiling.

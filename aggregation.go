@@ -60,20 +60,20 @@ func (a *Arca) GetPnl(ctx context.Context, path, from, to string) (PnlResponse, 
 }
 
 type v2HistoryPoint struct {
-	Ts             string           `json:"ts"`
-	EquityUsd      string           `json:"equityUsd"`
-	Status         ChartPointStatus `json:"status,omitempty"`
-	CumInflowsUsd  string           `json:"cumInflowsUsd,omitempty"`
-	CumOutflowsUsd string           `json:"cumOutflowsUsd,omitempty"`
-	LastEventOpID  string           `json:"lastEventOpId,omitempty"`
-	MidSetID       string           `json:"midSetId,omitempty"`
-	PnlUsd         string           `json:"pnlUsd,omitempty"`
-	ValueUsd       string           `json:"valueUsd,omitempty"`
+	Ts                 string           `json:"ts"`
+	EquityUsd          string           `json:"equityUsd"`
+	UnflooredEquityUsd string           `json:"unflooredEquityUsd,omitempty"`
+	Status             ChartPointStatus `json:"status,omitempty"`
+	CumInflowsUsd      string           `json:"cumInflowsUsd,omitempty"`
+	CumOutflowsUsd     string           `json:"cumOutflowsUsd,omitempty"`
+	PnlUsd             string           `json:"pnlUsd,omitempty"`
+	ValueUsd           string           `json:"valueUsd,omitempty"`
 }
 
 type v2HistoryResponse struct {
 	Resolution          string           `json:"resolution"`
 	ResolutionRequested string           `json:"resolutionRequested"`
+	BucketSeconds       int              `json:"bucketSeconds"`
 	ServerNow           string           `json:"serverNow"`
 	Points              []v2HistoryPoint `json:"points"`
 }
@@ -81,10 +81,10 @@ type v2HistoryResponse struct {
 type v2PnlHistoryResponse struct {
 	Resolution          string              `json:"resolution"`
 	ResolutionRequested string              `json:"resolutionRequested"`
+	BucketSeconds       int                 `json:"bucketSeconds"`
 	ServerNow           string              `json:"serverNow"`
 	StartEquityUsd      string              `json:"startEquityUsd"`
 	StartingEquityUsd   string              `json:"startingEquityUsd"`
-	EffectiveFrom       string              `json:"effectiveFrom"`
 	ExternalFlows       []ExternalFlowEntry `json:"externalFlows"`
 	MidPrices           map[string]string   `json:"midPrices"`
 	Points              []v2HistoryPoint    `json:"points"`
@@ -166,15 +166,16 @@ func normalizeV2EquityHistory(path, from, to string, resp v2HistoryResponse) Equ
 	pts := make([]EquityPoint, 0, len(resp.Points))
 	for _, p := range resp.Points {
 		pts = append(pts, EquityPoint{
-			Timestamp: p.Ts, EquityUsd: p.EquityUsd, Status: p.Status,
+			Timestamp: p.Ts, EquityUsd: p.EquityUsd, UnflooredEquityUsd: p.UnflooredEquityUsd,
+			Status:        p.Status,
 			CumInflowsUsd: p.CumInflowsUsd, CumOutflowsUsd: p.CumOutflowsUsd,
-			LastEventOpID: p.LastEventOpID, MidSetID: p.MidSetID,
 		})
 	}
 	return EquityHistoryResponse{
 		Prefix: path, From: from, To: to, Points: len(pts),
 		Resolution: resp.Resolution, ResolutionRequested: resp.ResolutionRequested,
-		ServerNow: resp.ServerNow, EquityPoints: pts,
+		BucketSeconds: resp.BucketSeconds,
+		ServerNow:     resp.ServerNow, EquityPoints: pts,
 	}
 }
 
@@ -182,9 +183,9 @@ func normalizeV2PnlHistory(path, from, to string, resp v2PnlHistoryResponse) Pnl
 	pts := make([]PnlPoint, 0, len(resp.Points))
 	for _, p := range resp.Points {
 		pts = append(pts, PnlPoint{
-			Timestamp: p.Ts, PnlUsd: p.PnlUsd, EquityUsd: p.EquityUsd, ValueUsd: p.ValueUsd,
+			Timestamp: p.Ts, PnlUsd: p.PnlUsd, EquityUsd: p.EquityUsd,
+			UnflooredEquityUsd: p.UnflooredEquityUsd, ValueUsd: p.ValueUsd,
 			Status: p.Status, CumInflowsUsd: p.CumInflowsUsd, CumOutflowsUsd: p.CumOutflowsUsd,
-			LastEventOpID: p.LastEventOpID, MidSetID: p.MidSetID,
 		})
 	}
 	start := resp.StartEquityUsd
@@ -205,7 +206,8 @@ func normalizeV2PnlHistory(path, from, to string, resp v2PnlHistoryResponse) Pnl
 	return PnlHistoryResponse{
 		Prefix: path, From: from, To: to, Points: len(pts),
 		Resolution: resp.Resolution, ResolutionRequested: resp.ResolutionRequested,
-		ServerNow: resp.ServerNow, StartingEquityUsd: start, EffectiveFrom: resp.EffectiveFrom,
+		BucketSeconds: resp.BucketSeconds,
+		ServerNow:     resp.ServerNow, StartingEquityUsd: start,
 		PnlPoints: pts, ExternalFlows: flows, MidPrices: mids,
 	}
 }

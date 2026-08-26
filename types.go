@@ -719,6 +719,11 @@ type PnlResponse struct {
 	ExternalFlows     []ExternalFlowEntry `json:"externalFlows,omitempty"`
 }
 
+// ChartPointStatus describes the provenance of a bucket's CASH side. It
+// is not a marked/unmarked flag: every bucket is marked to that bucket's
+// own mids, so a ChartCarried point still changes value as the market
+// moves. ChartIncomplete means an input was missing (no mid for one of
+// the markets, or the position overlay could not run).
 type ChartPointStatus string
 
 const (
@@ -729,15 +734,21 @@ const (
 )
 
 type PnlPoint struct {
-	Timestamp      string           `json:"timestamp"`
-	PnlUsd         string           `json:"pnlUsd"`
-	EquityUsd      string           `json:"equityUsd"`
-	Status         ChartPointStatus `json:"status,omitempty"`
-	CumInflowsUsd  string           `json:"cumInflowsUsd,omitempty"`
-	CumOutflowsUsd string           `json:"cumOutflowsUsd,omitempty"`
-	LastEventOpID  string           `json:"lastEventOpId,omitempty"`
-	MidSetID       string           `json:"midSetId,omitempty"`
-	ValueUsd       string           `json:"valueUsd,omitempty"`
+	Timestamp string `json:"timestamp"`
+	// PnlUsd is flow-adjusted: external inflows/outflows removed,
+	// anchored at the first point. A deposit does not move it.
+	PnlUsd string `json:"pnlUsd"`
+	// EquityUsd is the marked account value for this bucket, floored at
+	// zero — the same number GetEquityHistory returns for the same
+	// bucket. Chart this, not PnlUsd, for "what is the account worth".
+	EquityUsd string `json:"equityUsd"`
+	// UnflooredEquityUsd is the true signed value, present only when the
+	// floor clamped this point. PnlUsd is already derived from it.
+	UnflooredEquityUsd string           `json:"unflooredEquityUsd,omitempty"`
+	Status             ChartPointStatus `json:"status,omitempty"`
+	CumInflowsUsd      string           `json:"cumInflowsUsd,omitempty"`
+	CumOutflowsUsd     string           `json:"cumOutflowsUsd,omitempty"`
+	ValueUsd           string           `json:"valueUsd,omitempty"`
 }
 
 type PnlHistoryResponse struct {
@@ -747,33 +758,50 @@ type PnlHistoryResponse struct {
 	Points              int                 `json:"points"`
 	Resolution          string              `json:"resolution,omitempty"`
 	ResolutionRequested string              `json:"resolutionRequested,omitempty"`
+	BucketSeconds       int                 `json:"bucketSeconds,omitempty"`
 	ServerNow           string              `json:"serverNow,omitempty"`
 	StartingEquityUsd   string              `json:"startingEquityUsd"`
-	EffectiveFrom       string              `json:"effectiveFrom,omitempty"`
 	PnlPoints           []PnlPoint          `json:"pnlPoints"`
 	ExternalFlows       []ExternalFlowEntry `json:"externalFlows,omitempty"`
 	MidPrices           map[string]string   `json:"midPrices,omitempty"`
 }
 
 type EquityPoint struct {
-	Timestamp      string           `json:"timestamp"`
-	EquityUsd      string           `json:"equityUsd"`
-	Status         ChartPointStatus `json:"status,omitempty"`
-	CumInflowsUsd  string           `json:"cumInflowsUsd,omitempty"`
-	CumOutflowsUsd string           `json:"cumOutflowsUsd,omitempty"`
-	LastEventOpID  string           `json:"lastEventOpId,omitempty"`
-	MidSetID       string           `json:"midSetId,omitempty"`
+	Timestamp string `json:"timestamp"`
+	// EquityUsd is the marked account value for this bucket: cash valued
+	// at the bucket's own mids, plus unrealized P&L on every position
+	// open at that bucket, valued at the same mids. Floored at zero —
+	// an exchange account is the one class permitted to hold a negative
+	// balance, and a balance that renders negative is worse than one
+	// that renders as zero.
+	EquityUsd string `json:"equityUsd"`
+	// UnflooredEquityUsd is the true signed value, present ONLY when the
+	// floor clamped this point — so its presence is also how you tell a
+	// floored point from a genuinely-zero one. The floor never destroys
+	// the number; use this to reconstruct the real change.
+	UnflooredEquityUsd string           `json:"unflooredEquityUsd,omitempty"`
+	Status             ChartPointStatus `json:"status,omitempty"`
+	CumInflowsUsd      string           `json:"cumInflowsUsd,omitempty"`
+	CumOutflowsUsd     string           `json:"cumOutflowsUsd,omitempty"`
 }
 
 type EquityHistoryResponse struct {
-	Prefix              string        `json:"prefix"`
-	From                string        `json:"from"`
-	To                  string        `json:"to"`
-	Points              int           `json:"points"`
-	Resolution          string        `json:"resolution,omitempty"`
-	ResolutionRequested string        `json:"resolutionRequested,omitempty"`
-	ServerNow           string        `json:"serverNow,omitempty"`
-	EquityPoints        []EquityPoint `json:"equityPoints"`
+	Prefix string `json:"prefix"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Points int    `json:"points"`
+	// Resolution is the ladder rung actually served. The ladder picks
+	// the finest rung whose bucket count fits the requested points, so a
+	// 24h window at points=180 is served at 15m (~96 points). Compare
+	// two series by window and Resolution, never by slice length.
+	Resolution string `json:"resolution,omitempty"`
+	// ResolutionRequested is set only when the requested rung lacked
+	// coverage and the server promoted to a coarser one.
+	ResolutionRequested string `json:"resolutionRequested,omitempty"`
+	// BucketSeconds is the bucket width of Resolution.
+	BucketSeconds int           `json:"bucketSeconds,omitempty"`
+	ServerNow     string        `json:"serverNow,omitempty"`
+	EquityPoints  []EquityPoint `json:"equityPoints"`
 }
 
 // ---- Reconciliation ----
