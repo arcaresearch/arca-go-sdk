@@ -138,6 +138,14 @@ func (c *httpClient) post(ctx context.Context, path string, body, out any) error
 	return c.executeWithAuthRetry(ctx, http.MethodPost, path, nil, body, out)
 }
 
+// postQuery is post with a query string, for the handful of POST routes that
+// read the realm from the query rather than the body (the custody co-sign
+// pair). Kept as a sibling rather than widening post, whose signature every
+// other mutation in the SDK already uses.
+func (c *httpClient) postQuery(ctx context.Context, path string, params url.Values, body, out any) error {
+	return c.executeWithAuthRetry(ctx, http.MethodPost, path, params, body, out)
+}
+
 func (c *httpClient) patch(ctx context.Context, path string, params url.Values, body, out any) error {
 	return c.executeWithAuthRetry(ctx, http.MethodPatch, path, params, body, out)
 }

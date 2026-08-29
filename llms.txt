@@ -84,6 +84,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Merge folder labels (delta) | client.PatchFolderLabels(ctx, PatchFolderLabelsOptions{Path, Labels map[string]*string}) — nil pointer removes a key, unmentioned keys untouched |
 | Balances | client.GetBalances(ctx, id) / GetBalancesByPath(ctx, path) |
 | Transfer | client.Transfer(ctx, TransferOptions{Path, From, To, Amount}) |
+| Move capital between two venues | client.HopVenues(ctx, HopVenuesOptions{Path, From, To, Amount, Sign}) |
 | Fund (dev) | client.FundAccount(ctx, FundAccountOptions{ArcaRef, Amount}) |
 | Withdraw (dev) | client.DefundAccount(ctx, DefundAccountOptions{ArcaPath, Amount}) |
 | Payment link | client.CreatePaymentLink(ctx, CreatePaymentLinkOptions{Type, ArcaRef, Amount}) |
@@ -137,6 +138,18 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Prepare custody tx | arca.PrepareLockBoundary/PrepareWithdraw/PrepareAssignRecoveryKey/... |
 | Reconciliation | client.ListReconciliationState(ctx) |
 | Invariant check | client.CheckInvariants(ctx, limit, realmId) |
+
+## Venue-to-venue hops
+
+A transfer whose From AND To are both exchange objects is a **venue hop**: value goes venue-to-venue in one on-chain frame and never rests at a boundary, so no intermediate denominated arca is needed. Plain `Transfer` performs it. Hops carry **no fee** (a non-zero one is refused, not ignored) and work across isolation boundaries. Destinations are limited to Hyperliquid and the paper venue; a GLL-paper target is refused because its account is faucet-credited rather than credited by value landing at the venue contract.
+
+`HopVenues` is `Transfer` **plus the co-sign fallback**, and is what to reach for when the source boundary might be armed. On an unarmed boundary it is exactly a transfer and `Sign` is never invoked; on an armed one the plain call is refused (the kernel will not move value out unsigned) so it proposes, calls `Sign(ctx, digest, proposal)`, and submits. `Sign` is a `CosignDigestSigner` — an HSM, a KMS, a hardware wallet; the SDK never holds this key. Leave it nil and an armed boundary returns `*CosignRequiredError`, whose `Challenge` names `Surface` / `BoundaryID` / `Propose` / `Submit`. Unlike `*StepUpRequiredError` there is no handler hook and no auto-retry: a browser confirmation is something the platform can drive, a co-signature is not.
+
+`ProposeVenueHop` / `SubmitVenueHop` expose the halves when you want to drive it yourself. `Path` is required at propose and must match at submit — the signed `Ref` derives from it.
+
+**`HopVenues` verifies the proposal before it calls `Sign`, and so should you if you drive the halves yourself.** A digest is 32 opaque bytes: a key asked to sign one cannot tell a hop to your own paper account from a hop to a stranger's, and neither can a user staring at a device prompt. `proposal.Verify()` re-derives the `paramsHash` and the EIP-712 digest from the proposal's own readable fields and returns an error unless both match what the server sent — so a propose response that quietly changed the destination sub-account or raised the amount is refused locally rather than discovered on chain. It also pins the EIP-712 domain to this SDK's own `ArcaCustodyKernel` / version `"2"` constants rather than trusting the response, so a signature cannot be moved onto a kernel whose semantics this SDK has never seen.
+
+The pieces are exported for callers who want them directly: `TransferBetweenVenuesParamsHash`, `OperatorActionDigest`, `CosignDomainSeparator`, and — for a backend that holds the key rather than delegating to an HSM — `SignCosignDigest(privKey, digest)` and `SignVenueHop(privKey, proposal)` (which verifies first, then signs). Encode `AmountRaw`, never the decimal `Amount`. All of it is pinned byte-for-byte against the Solidity implementation by the shared cross-SDK golden vectors.
 
 ## Watch streams (real-time)
 

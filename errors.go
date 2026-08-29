@@ -172,6 +172,48 @@ type StepUpRequiredError struct {
 // cancelled the confirmation flow (or it expired / errored).
 type StepUpCancelledError struct{ *ArcaError }
 
+// CosignRequiredChallenge is the structured payload accompanying a 412
+// COSIGN_REQUIRED response.
+//
+// A co-sign-armed isolation boundary requires the boundary owner's EIP-712
+// signature before value may leave it, and the platform cannot produce that
+// signature — only the key holder can. The challenge names which surface was
+// gated and where to take the propose/submit pair that collects it.
+//
+// Surface is the discriminator worth branching on: "transfer.venue_hop",
+// "transfer.venue_deposit", "transfer.cross_boundary", "deposit.venue_deposit",
+// "withdrawal.plain".
+type CosignRequiredChallenge struct {
+	Surface    string
+	BoundaryID string
+	// ArcaPath is set on single-object surfaces (deposit, withdrawal).
+	ArcaPath string
+	// SourceArcaPath / TargetArcaPath are set on the two-ended surfaces
+	// (transfer, hop).
+	SourceArcaPath string
+	TargetArcaPath string
+	// Propose / Submit are the endpoints that collect the signature, when the
+	// surface has a pair.
+	Propose string
+	Submit  string
+}
+
+// CosignRequiredError is returned when an operation would move value out of a
+// co-sign-armed boundary without the owner's signature (HTTP 412
+// COSIGN_REQUIRED).
+//
+// Unlike StepUpRequiredError, the SDK cannot transparently retry this: step-up
+// is a browser confirmation the platform can drive, while a co-signature comes
+// from a key the platform does not hold. The caller must route the Challenge
+// to whatever holds the boundary's co-sign key.
+//
+// For venue hops, Arca.HopVenues handles this end to end — it catches the 412,
+// proposes, hands the digest to the supplied Sign func, and submits.
+type CosignRequiredError struct {
+	*ArcaError
+	Challenge CosignRequiredChallenge
+}
+
 // Unwrap exposes the embedded *ArcaError so errors.As(err, &arca.ArcaError{})
 // reaches the base error (Code/Message/ErrorID) from any typed error.
 func (e *ValidationError) Unwrap() error       { return e.ArcaError }
@@ -185,6 +227,7 @@ func (e *OperationFailedError) Unwrap() error  { return e.ArcaError }
 func (e *OperationStalledError) Unwrap() error { return e.ArcaError }
 func (e *StepUpRequiredError) Unwrap() error   { return e.ArcaError }
 func (e *StepUpCancelledError) Unwrap() error  { return e.ArcaError }
+func (e *CosignRequiredError) Unwrap() error   { return e.ArcaError }
 
 func newOperationFailedError(op OperationSnapshot) *OperationFailedError {
 	msg := "This operation could not be completed."
@@ -205,6 +248,35 @@ func newOperationStalledError(operationID string, timeoutMS int64, op *Operation
 		OperationID: operationID,
 		TimeoutMS:   timeoutMS,
 		Operation:   op,
+	}
+}
+
+// parseCosignChallenge extracts a co-sign challenge from the server's
+// error.details map.
+//
+// Only BoundaryID is required: the surfaces differ in which path fields they
+// carry, and a challenge naming the boundary is still actionable even if a
+// future surface adds fields this version does not know.
+func parseCosignChallenge(details map[string]any) *CosignRequiredChallenge {
+	if details == nil {
+		return nil
+	}
+	str := func(key string) string {
+		s, _ := details[key].(string)
+		return s
+	}
+	boundaryID := str("boundaryId")
+	if boundaryID == "" {
+		return nil
+	}
+	return &CosignRequiredChallenge{
+		Surface:        str("surface"),
+		BoundaryID:     boundaryID,
+		ArcaPath:       str("arcaPath"),
+		SourceArcaPath: str("sourceArcaPath"),
+		TargetArcaPath: str("targetArcaPath"),
+		Propose:        str("propose"),
+		Submit:         str("submit"),
 	}
 }
 
@@ -264,6 +336,11 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 	case "STEP_UP_REQUIRED":
 		if challenge := parseStepUpChallenge(details); challenge != nil {
 			return &StepUpRequiredError{ArcaError: base, Action: challenge.Action, Resources: challenge.Resources}
+		}
+		return base
+	case "COSIGN_REQUIRED":
+		if challenge := parseCosignChallenge(details); challenge != nil {
+			return &CosignRequiredError{ArcaError: base, Challenge: *challenge}
 		}
 		return base
 	default:
