@@ -214,6 +214,43 @@ type CosignRequiredError struct {
 	Challenge CosignRequiredChallenge
 }
 
+// CosignNonceUsedDetails is the structured payload accompanying a 412
+// COSIGN_NONCE_USED response.
+//
+// Reason is either "nonce_consumed" (the burn-set kernel, marker 7+, says this
+// exact slot is spent — the action executed, or the owner revoked it with
+// invalidateCosignNonce) or "counter_stale" (a frozen-counter kernel, marker
+// 3-6, moved its counter while the device was signing). Both resolve
+// identically, so branch on the error type; Reason is for logs.
+type CosignNonceUsedDetails struct {
+	BoundaryID string
+	// Nonce is the value that was refused, as a decimal string.
+	Nonce  string
+	Reason string
+	// Resolution is the human-readable remedy, always "re-propose … re-sign
+	// … resubmit".
+	Resolution string
+}
+
+// CosignNonceUsedError is returned when a co-signed submission names a nonce
+// that can no longer be spent (HTTP 412 COSIGN_NONCE_USED).
+//
+// This is NOT a signature failure. The signature was very likely fine; the
+// slot it committed to is gone — a retry racing the original already spent it,
+// or the user cancelled the approval. The remedy is always the same: propose
+// again, have the device sign the fresh digest, resubmit. Reporting it as a
+// signature mismatch tells the user their wallet misbehaved when it did not.
+//
+// Treat it as blocked-pending-user rather than retryable: replaying the same
+// envelope can never succeed, so a reconciler must re-propose.
+//
+// Arca.GetCosignNonceState checks the slot BEFORE submitting, which avoids the
+// round trip for an envelope that has been outstanding a while.
+type CosignNonceUsedError struct {
+	*ArcaError
+	Details CosignNonceUsedDetails
+}
+
 // Unwrap exposes the embedded *ArcaError so errors.As(err, &arca.ArcaError{})
 // reaches the base error (Code/Message/ErrorID) from any typed error.
 func (e *ValidationError) Unwrap() error       { return e.ArcaError }
@@ -228,6 +265,7 @@ func (e *OperationStalledError) Unwrap() error { return e.ArcaError }
 func (e *StepUpRequiredError) Unwrap() error   { return e.ArcaError }
 func (e *StepUpCancelledError) Unwrap() error  { return e.ArcaError }
 func (e *CosignRequiredError) Unwrap() error   { return e.ArcaError }
+func (e *CosignNonceUsedError) Unwrap() error  { return e.ArcaError }
 
 func newOperationFailedError(op OperationSnapshot) *OperationFailedError {
 	msg := "This operation could not be completed."
@@ -277,6 +315,31 @@ func parseCosignChallenge(details map[string]any) *CosignRequiredChallenge {
 		TargetArcaPath: str("targetArcaPath"),
 		Propose:        str("propose"),
 		Submit:         str("submit"),
+	}
+}
+
+// parseCosignNonceUsed extracts the spent-nonce payload from the server's
+// error.details map.
+//
+// Only BoundaryID is required, matching parseCosignChallenge: an error naming
+// the boundary is actionable even if a future field is unrecognized.
+func parseCosignNonceUsed(details map[string]any) *CosignNonceUsedDetails {
+	if details == nil {
+		return nil
+	}
+	str := func(key string) string {
+		s, _ := details[key].(string)
+		return s
+	}
+	boundaryID := str("boundaryId")
+	if boundaryID == "" {
+		return nil
+	}
+	return &CosignNonceUsedDetails{
+		BoundaryID: boundaryID,
+		Nonce:      str("nonce"),
+		Reason:     str("reason"),
+		Resolution: str("resolution"),
 	}
 }
 
@@ -341,6 +404,11 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 	case "COSIGN_REQUIRED":
 		if challenge := parseCosignChallenge(details); challenge != nil {
 			return &CosignRequiredError{ArcaError: base, Challenge: *challenge}
+		}
+		return base
+	case "COSIGN_NONCE_USED":
+		if parsed := parseCosignNonceUsed(details); parsed != nil {
+			return &CosignNonceUsedError{ArcaError: base, Details: *parsed}
 		}
 		return base
 	default:

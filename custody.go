@@ -81,6 +81,64 @@ func (a *Arca) GetBoundary(ctx context.Context, boundaryID string) (CustodyBound
 	return out, err
 }
 
+// CosignNonceState reports whether one co-signature nonce can still be spent
+// on a boundary.
+//
+// Read Spendable — it is the only field correct on both kernel generations.
+type CosignNonceState struct {
+	BoundaryID string `json:"boundaryId"`
+	// Nonce is the value that was checked, echoed as a decimal string.
+	Nonce string `json:"nonce"`
+	// Spendable is the single answer most callers want: can this envelope
+	// still be submitted? Correct on both kernel generations.
+	Spendable bool `json:"spendable"`
+	// Consumed is the burn-set read: true means this slot is spent.
+	//
+	// Meaningful ONLY when Unordered is true. A frozen-counter kernel has no
+	// burn set, so this is always false there — including for nonces the
+	// counter will refuse. Prefer Spendable.
+	Consumed bool `json:"consumed"`
+	// Unordered is true on a burn-set kernel (marker 7+) that accepts
+	// caller-chosen nonces; false on a frozen-counter kernel (marker 3-6),
+	// where CounterNonce is the only value it will accept.
+	Unordered bool `json:"unordered"`
+	// CounterNonce is the boundary's live counter, present only when
+	// Unordered is false. On such a kernel an envelope is live iff it was
+	// signed over exactly this value.
+	CounterNonce string `json:"counterNonce,omitempty"`
+}
+
+// GetCosignNonceState reports whether a co-signature's nonce can still be
+// spent, without the caller holding a chain client.
+//
+// Use it before submitting an envelope that has been outstanding long enough
+// to have been overtaken — a retry that raced the original, a second device,
+// or a user who cancelled. Submitting a spent nonce returns
+// *CosignNonceUsedError; this read tells you first, so you can re-propose
+// without asking for a signature that cannot land.
+//
+//	state, err := a.GetCosignNonceState(ctx, "bnd_abc", proposal.Nonce)
+//	if err == nil && !state.Spendable {
+//	    // re-propose rather than signing a dead slot
+//	}
+//
+// Read Spendable, not Consumed: on a frozen-counter kernel there is no burn
+// set, so Consumed is always false even for a nonce the kernel will refuse.
+//
+// This answers about the nonce, not the signature over it. A spendable nonce
+// means submitting is not futile — not that the envelope will verify.
+func (a *Arca) GetCosignNonceState(ctx context.Context, boundaryID, nonce string) (CosignNonceState, error) {
+	var out CosignNonceState
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.get(ctx,
+		"/custody/boundaries/"+url.PathEscape(boundaryID)+"/cosign-nonces/"+url.PathEscape(nonce),
+		url.Values{"realmId": {rid}}, &out)
+	return out, err
+}
+
 // ListBoundaries lists all isolation boundaries for the realm.
 func (a *Arca) ListBoundaries(ctx context.Context) ([]CustodyBoundary, error) {
 	rid, err := a.realmID(ctx)
