@@ -78,6 +78,146 @@ func TestMapAPIError_CosignNonceUsed_NoBoundaryFallsBack(t *testing.T) {
 	}
 }
 
+// Reason names the nonce lane; Disposition names the cause. Only the second
+// answers "did my customer's money leave?", which is what has to be known
+// before re-sending anything.
+func TestMapAPIError_CosignNonceUsed_ExecutedCarriesOperation(t *testing.T) {
+	err := mapAPIError("COSIGN_NONCE_USED", "already used", "", map[string]any{
+		"boundaryId":  "bnd_armed",
+		"nonce":       "42",
+		"reason":      "nonce_consumed",
+		"disposition": "executed",
+		"txHash":      "0xabc",
+		"operationId": "op_01k",
+	})
+
+	var typed *CosignNonceUsedError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error is %T, want *CosignNonceUsedError", err)
+	}
+	if typed.Details.Disposition != CosignNonceExecuted {
+		t.Errorf("Disposition = %q, want executed", typed.Details.Disposition)
+	}
+	if typed.Details.OperationID != "op_01k" {
+		t.Errorf("OperationID = %q, want the operation to reconcile against", typed.Details.OperationID)
+	}
+	if typed.Details.TxHash != "0xabc" {
+		t.Errorf("TxHash = %q", typed.Details.TxHash)
+	}
+}
+
+func TestMapAPIError_CosignNonceUsed_RevokedCarriesNoOperation(t *testing.T) {
+	err := mapAPIError("COSIGN_NONCE_USED", "already used", "", map[string]any{
+		"boundaryId":  "bnd_armed",
+		"reason":      "nonce_consumed",
+		"disposition": "revoked",
+		"txHash":      "0xdead",
+	})
+
+	var typed *CosignNonceUsedError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error is %T, want *CosignNonceUsedError", err)
+	}
+	if typed.Details.Disposition != CosignNonceRevoked {
+		t.Errorf("Disposition = %q, want revoked", typed.Details.Disposition)
+	}
+	// The owner acted directly on the kernel with their sovereign key, so
+	// there is no send of ours to name.
+	if typed.Details.OperationID != "" {
+		t.Errorf("OperationID = %q, want empty for a revocation", typed.Details.OperationID)
+	}
+}
+
+// The safety-critical narrowing. A disposition this SDK does not recognize must
+// land on unknown, never reach a caller's `default` arm as an opaque string —
+// that arm gets written as "not executed, so nothing moved" far more often than
+// as "unrecognized, go reconcile", and being wrong about it loses money.
+func TestMapAPIError_CosignNonceUsed_UnrecognizedDispositionNarrowsToUnknown(t *testing.T) {
+	err := mapAPIError("COSIGN_NONCE_USED", "refused", "", map[string]any{
+		"boundaryId":  "bnd_future",
+		"disposition": "superseded_by_something_new",
+	})
+
+	var typed *CosignNonceUsedError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error is %T, want *CosignNonceUsedError", err)
+	}
+	if typed.Details.Disposition != CosignNonceUnknown {
+		t.Errorf("Disposition = %q, want %q", typed.Details.Disposition, CosignNonceUnknown)
+	}
+}
+
+// An older server sends no disposition. Empty must stay empty so "this
+// deployment doesn't report it" is distinguishable from "we looked and
+// couldn't tell".
+func TestMapAPIError_CosignNonceUsed_OmittedDispositionStaysEmpty(t *testing.T) {
+	err := mapAPIError("COSIGN_NONCE_USED", "refused", "", map[string]any{
+		"boundaryId": "bnd_old",
+		"reason":     "nonce_consumed",
+	})
+
+	var typed *CosignNonceUsedError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error is %T, want *CosignNonceUsedError", err)
+	}
+	if typed.Details.Disposition != "" {
+		t.Errorf("Disposition = %q, want empty when the server omits it", typed.Details.Disposition)
+	}
+}
+
+// The follow-up read after a refusal: not just "is it gone" but "did the money
+// move, and against which operation do I reconcile".
+func TestGetCosignNonceState_ReportsExecutedDisposition(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, 200, CosignNonceState{
+			BoundaryID:  "bnd_v7",
+			Nonce:       "42",
+			Spendable:   false,
+			Consumed:    true,
+			Unordered:   true,
+			Disposition: CosignNonceExecuted,
+			TxHash:      "0xabc",
+			OperationID: "op_01k",
+		})
+	}))
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	state, err := a.GetCosignNonceState(context.Background(), "bnd_v7", "42")
+	if err != nil {
+		t.Fatalf("GetCosignNonceState: %v", err)
+	}
+	if state.Disposition != CosignNonceExecuted {
+		t.Errorf("Disposition = %q, want executed", state.Disposition)
+	}
+	if state.OperationID != "op_01k" {
+		t.Errorf("OperationID = %q", state.OperationID)
+	}
+}
+
+// A spendable slot has no burn, so there is nothing to attribute. An "unknown"
+// here would read as "gone, cause unclear" for a slot that is perfectly open.
+func TestGetCosignNonceState_SpendableCarriesNoDisposition(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, 200, CosignNonceState{
+			BoundaryID: "bnd_v7",
+			Nonce:      "42",
+			Spendable:  true,
+			Unordered:  true,
+		})
+	}))
+	defer srv.Close()
+	a := newTestArca(t, srv.URL)
+
+	state, err := a.GetCosignNonceState(context.Background(), "bnd_v7", "42")
+	if err != nil {
+		t.Fatalf("GetCosignNonceState: %v", err)
+	}
+	if state.Disposition != "" {
+		t.Errorf("Disposition = %q, want empty for an unburned slot", state.Disposition)
+	}
+}
+
 func TestGetCosignNonceState_UnorderedLane(t *testing.T) {
 	var gotPath, gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

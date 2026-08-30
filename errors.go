@@ -230,7 +230,35 @@ type CosignNonceUsedDetails struct {
 	// Resolution is the human-readable remedy, always "re-propose … re-sign
 	// … resubmit".
 	Resolution string
+	// Disposition explains why the slot is gone — the field that tells you
+	// whether the value moved. Reason names which nonce LANE refused; this
+	// names the CAUSE, and the two causes are opposite facts about your
+	// customer's money. Branch on it before deciding whether to re-send:
+	//
+	//   CosignNonceExecuted — the action already ran. Reconcile against
+	//                         OperationID; do NOT re-send.
+	//   CosignNonceRevoked  — the owner cancelled it; nothing moved. Safe to
+	//                         fail the attempt or re-propose.
+	//   CosignNonceUnknown  — could not be established. Reconcile before
+	//                         re-sending; this is not evidence that nothing
+	//                         happened.
+	//
+	// Always populated by a current server. Treat empty as unknown.
+	Disposition string
+	// TxHash is the transaction that burned the slot, when one was found.
+	TxHash string
+	// OperationID is the platform operation that spent the nonce. Populated
+	// only when Disposition is CosignNonceExecuted and the platform submitted
+	// it.
+	OperationID string
 }
+
+// Co-sign nonce dispositions. See CosignNonceUsedDetails.Disposition.
+const (
+	CosignNonceExecuted = "executed"
+	CosignNonceRevoked  = "revoked"
+	CosignNonceUnknown  = "unknown"
+)
 
 // CosignNonceUsedError is returned when a co-signed submission names a nonce
 // that can no longer be spent (HTTP 412 COSIGN_NONCE_USED).
@@ -336,10 +364,31 @@ func parseCosignNonceUsed(details map[string]any) *CosignNonceUsedDetails {
 		return nil
 	}
 	return &CosignNonceUsedDetails{
-		BoundaryID: boundaryID,
-		Nonce:      str("nonce"),
-		Reason:     str("reason"),
-		Resolution: str("resolution"),
+		BoundaryID:  boundaryID,
+		Nonce:       str("nonce"),
+		Reason:      str("reason"),
+		Resolution:  str("resolution"),
+		Disposition: normalizeCosignDisposition(str("disposition")),
+		TxHash:      str("txHash"),
+		OperationID: str("operationId"),
+	}
+}
+
+// normalizeCosignDisposition narrows an unrecognized disposition to
+// CosignNonceUnknown rather than passing it through.
+//
+// A caller switches on this to decide whether to re-send money, and a `default`
+// arm is far more likely to be written as "not executed, so nothing moved"
+// than as "unrecognized, go reconcile". Collapsing here makes the unsafe
+// reading unreachable. An EMPTY value stays empty, so "this server doesn't
+// report disposition" remains distinguishable from "we looked and couldn't
+// tell".
+func normalizeCosignDisposition(d string) string {
+	switch d {
+	case "", CosignNonceExecuted, CosignNonceRevoked, CosignNonceUnknown:
+		return d
+	default:
+		return CosignNonceUnknown
 	}
 }
 

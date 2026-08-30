@@ -106,6 +106,20 @@ type CosignNonceState struct {
 	// Unordered is false. On such a kernel an envelope is live iff it was
 	// signed over exactly this value.
 	CounterNonce string `json:"counterNonce,omitempty"`
+	// Disposition explains why an unspendable slot is gone:
+	// CosignNonceExecuted, CosignNonceRevoked, or CosignNonceUnknown.
+	//
+	// Empty when Spendable is true — an unburned slot has no burn to explain.
+	// Executed and Revoked are opposite answers to "did the value move?", so
+	// do not collapse them, and do not read Unknown as either one: only
+	// Revoked licenses asserting that nothing moved.
+	Disposition string `json:"disposition,omitempty"`
+	// TxHash is the transaction that burned the slot, when one was found.
+	TxHash string `json:"txHash,omitempty"`
+	// OperationID is the platform operation the burn belongs to. Populated
+	// only for an executed burn the platform submitted — a revocation is the
+	// owner acting directly on the kernel, so it has no operation.
+	OperationID string `json:"operationId,omitempty"`
 }
 
 // GetCosignNonceState reports whether a co-signature's nonce can still be
