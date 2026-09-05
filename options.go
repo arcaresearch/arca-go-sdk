@@ -187,9 +187,33 @@ type CreatePerpsExchangeOptions struct {
 	Ref string
 	// Venue the exchange object trades against: "hl-sim" (default)
 	// provisions a simulated Hyperliquid account for paper realms; "hl"
-	// provisions a live Hyperliquid account. The legacy long forms
+	// provisions a live Hyperliquid account; "gll-testnet" provisions an
+	// account on LayerZero's ATLAS testnet CLOB (development realms only,
+	// gated by the platform's GLL feature flag). The legacy long forms
 	// "sim-exchange" / "hyperliquid" are no longer accepted and are
 	// rejected with a validation error; use the canonical "hl-sim" / "hl".
+	//
+	// A bare "gll" is NOT accepted and does not mean the testnet: that token
+	// is reserved for a future GLL mainnet, and the two are separate venues
+	// holding separate accounts.
+	//
+	// ATLAS notes for "gll-testnet":
+	//
+	//   - Markets carry the `gllt` exchange prefix and NUMERIC canonical ids
+	//     ("gllt:3"), which have no human meaning. Resolve, never build:
+	//     ResolveMarkets("BTC", &ResolveMarketsOptions{Exchange: "gllt"})
+	//     and use Market.Name. The symbol is the BASE ASSET ("BTC"), not the
+	//     venue symbol ("BTC-USD-PERP") — that is Market.VenueSymbol and is
+	//     display text only.
+	//   - Leverage is fixed per market (10x on the crypto perps). SetLeverage
+	//     and the margin-mode calls are unsupported and refuse; hide those
+	//     controls rather than catching.
+	//   - No TP/SL and no TWAP in v1.
+	//   - The order book is SHARED and PUBLIC, and it is a testnet whose
+	//     operator can reset it without notice. Both belong in user-facing
+	//     copy.
+	//   - A one-time ~1 USDT activation fee is charged on first activity, so
+	//     equity reads as deposit − 1 afterwards.
 	Venue string
 	// Deprecated: use Venue. ExchangeType carried no venue information (it
 	// was always "hyperliquid") and is ignored. Removed in a future release.
