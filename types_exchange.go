@@ -354,6 +354,8 @@ type ExchangeIntent struct {
 }
 
 type ExchangeState struct {
+	FinancialInputID           string                  `json:"financialInputId,omitempty"`
+	MirrorUnsettledFunding     string                  `json:"mirrorUnsettledFunding,omitempty"`
 	TradingAllocation          *TradingAllocationState `json:"tradingAllocation,omitempty"`
 	Account                    SimAccount              `json:"account"`
 	MarginSummary              SimMarginSummary        `json:"marginSummary"`
@@ -427,16 +429,25 @@ type ActiveAssetData struct {
 }
 
 type UpdateLeverageResponse struct {
-	AccountID        string `json:"accountId"`
-	Market           string `json:"market"`
-	Leverage         int    `json:"leverage"`
-	PreviousLeverage int    `json:"previousLeverage"`
+	AccountID string `json:"accountId"`
+	Market    string `json:"market"`
+	// Nil only when GLL's applicable risk is unavailable; never treat as zero.
+	Leverage              *int                   `json:"leverage"`
+	PreviousLeverage      *int                   `json:"previousLeverage"`
+	Mode                  LeveragePreferenceMode `json:"mode,omitempty"`
+	IntendedLeverage      *int                   `json:"intendedLeverage,omitempty"`
+	Revision              string                 `json:"revision,omitempty"`
+	ProjectionUnavailable bool                   `json:"projectionUnavailable,omitempty"`
+	CommandID             string                 `json:"commandId,omitempty"`
 }
 
 type LeverageSetting struct {
-	Market     string     `json:"market"`
-	Leverage   int        `json:"leverage"`
-	MarginMode MarginMode `json:"marginMode"`
+	Market           string                 `json:"market"`
+	Leverage         *int                   `json:"leverage"`
+	MarginMode       MarginMode             `json:"marginMode"`
+	Mode             LeveragePreferenceMode `json:"mode,omitempty"`
+	IntendedLeverage *int                   `json:"intendedLeverage,omitempty"`
+	InputID          string                 `json:"inputId,omitempty"`
 }
 
 // UpdateIsolatedMarginResponse is returned by UpdateIsolatedMargin: the
