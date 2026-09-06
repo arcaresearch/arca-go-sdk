@@ -354,14 +354,15 @@ type ExchangeIntent struct {
 }
 
 type ExchangeState struct {
-	Account                    SimAccount        `json:"account"`
-	MarginSummary              SimMarginSummary  `json:"marginSummary"`
-	CrossMarginSummary         *SimMarginSummary `json:"crossMarginSummary,omitempty"`
-	CrossMaintenanceMarginUsed string            `json:"crossMaintenanceMarginUsed,omitempty"`
-	Positions                  []SimPosition     `json:"positions"`
-	OpenOrders                 []SimOrder        `json:"openOrders"`
-	FeeRates                   *SimFeeRates      `json:"feeRates,omitempty"`
-	PendingIntents             []ExchangeIntent  `json:"pendingIntents"`
+	TradingAllocation          *TradingAllocationState `json:"tradingAllocation,omitempty"`
+	Account                    SimAccount              `json:"account"`
+	MarginSummary              SimMarginSummary        `json:"marginSummary"`
+	CrossMarginSummary         *SimMarginSummary       `json:"crossMarginSummary,omitempty"`
+	CrossMaintenanceMarginUsed string                  `json:"crossMaintenanceMarginUsed,omitempty"`
+	Positions                  []SimPosition           `json:"positions"`
+	OpenOrders                 []SimOrder              `json:"openOrders"`
+	FeeRates                   *SimFeeRates            `json:"feeRates,omitempty"`
+	PendingIntents             []ExchangeIntent        `json:"pendingIntents"`
 }
 
 type AssetFeeEntry struct {
@@ -386,12 +387,12 @@ type MarginTable struct {
 }
 
 type ActiveAssetData struct {
-	Market                string       `json:"market"`
-	Leverage              LeverageInfo `json:"leverage"`
-	MaxBuySize            string       `json:"maxBuySize"`
-	MaxSellSize           string       `json:"maxSellSize"`
-	MaxBuyUsd             string       `json:"maxBuyUsd"`
-	MaxSellUsd            string       `json:"maxSellUsd"`
+	Market      string       `json:"market"`
+	Leverage    LeverageInfo `json:"leverage"`
+	MaxBuySize  string       `json:"maxBuySize"`
+	MaxSellSize string       `json:"maxSellSize"`
+	MaxBuyUsd   string       `json:"maxBuyUsd"`
+	MaxSellUsd  string       `json:"maxSellUsd"`
 	// MaxBuyReduceSize / MaxBuyOpenSize (and the sell pair) break MaxBuySize /
 	// MaxSellSize into the part that reduces the open position and the part
 	// that opens new exposure: MaxBuySize == MaxBuyReduceSize + MaxBuyOpenSize.
@@ -412,8 +413,8 @@ type ActiveAssetData struct {
 	// cross *maintenance* margin — maintenance is the lower requirement, so
 	// Withdrawable is normally larger and this value can go negative while the
 	// account is still solvent.
-	AvailableToTrade string `json:"availableToTrade"`
-	MarkPx           string `json:"markPx"`
+	AvailableToTrade      string       `json:"availableToTrade"`
+	MarkPx                string       `json:"markPx"`
 	FeeRate               string       `json:"feeRate"`
 	MaintenanceMarginRate string       `json:"maintenanceMarginRate"`
 	MarginTiers           []MarginTier `json:"marginTiers,omitempty"`
