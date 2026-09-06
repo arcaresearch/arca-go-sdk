@@ -87,8 +87,9 @@ type RealmEvent struct {
 	Mids           map[string]string `json:"mids,omitempty"`
 	MarketDataAsOf string            `json:"marketDataAsOf,omitempty"`
 
-	ExchangeState *ExchangeState   `json:"exchangeState,omitempty"`
-	Valuation     *ObjectValuation `json:"valuation,omitempty"`
+	ExchangeStateUnavailable bool             `json:"exchangeStateUnavailable,omitempty"`
+	ExchangeState            *ExchangeState   `json:"exchangeState,omitempty"`
+	Valuation                *ObjectValuation `json:"valuation,omitempty"`
 
 	// Exchange is present on EventExchangeProvisioned and EventExchangeReady.
 	Exchange *ExchangeProvisioning `json:"exchange,omitempty"`

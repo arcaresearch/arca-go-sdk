@@ -524,7 +524,10 @@ func (a *Arca) WatchObjects(ctx context.Context, paths []string) (*ObjectsWatchS
 // ExchangeWatchStream streams exchange-account state updates.
 type ExchangeWatchStream struct {
 	*WatchStream[ExchangeState]
-	objectID string
+	objectID         string
+	observationEpoch uint64
+	observationMu    sync.Mutex
+	expiryTimer      *time.Timer
 }
 
 // WatchExchangeState streams exchange state (positions, orders, pending
@@ -542,20 +545,100 @@ func (a *Arca) WatchExchangeState(ctx context.Context, objectID string) (*Exchan
 		if ev.EntityID != objectID && ev.EntityPath != objectPath {
 			return
 		}
+		s.observationMu.Lock()
+		s.observationEpoch++
+		epoch := s.observationEpoch
+		s.observationMu.Unlock()
+		if ev.ExchangeStateUnavailable {
+			s.invalidateExchangeObservation(epoch)
+			return
+		}
 		if ev.ExchangeState != nil {
-			s.emit(*ev.ExchangeState)
+			s.emitExchangeObservation(epoch, *ev.ExchangeState)
 			return
 		}
 		if st, e := a.GetExchangeState(context.Background(), objectID); e == nil {
-			s.emit(st)
+			s.emitExchangeObservation(epoch, st)
 		}
 	})
 	s.addUnsub(unsub)
 	s.addUnsub(func() { a.ws.unwatchPath(objectPath) })
+	s.addUnsub(func() {
+		s.observationMu.Lock()
+		defer s.observationMu.Unlock()
+		if s.expiryTimer != nil {
+			s.expiryTimer.Stop()
+		}
+	})
+	s.observationMu.Lock()
+	epoch := s.observationEpoch
+	s.observationMu.Unlock()
 	if st, e := a.GetExchangeState(ctx, objectID); e == nil {
-		s.emit(st)
+		s.emitExchangeObservation(epoch, st)
 	}
 	return s, nil
+}
+
+func (s *ExchangeWatchStream) emitExchangeObservation(epoch uint64, state ExchangeState) {
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
+	if s.observationEpoch != epoch {
+		return
+	}
+	s.observationEpoch++
+	epoch = s.observationEpoch
+	if s.expiryTimer != nil {
+		s.expiryTimer.Stop()
+	}
+	if a := state.TradingAllocation; a != nil && a.ValidUntil != "" {
+		until, err := time.Parse(time.RFC3339Nano, a.ValidUntil)
+		delay := time.Until(until)
+		if a.AsOf != "" {
+			asOf, e := time.Parse(time.RFC3339Nano, a.AsOf)
+			if e != nil {
+				err = e
+			} else if budget := until.Sub(asOf); budget < delay {
+				delay = budget
+			}
+		}
+		if err != nil || delay <= 0 {
+			s.expiryTimer = time.AfterFunc(0, func() { s.invalidateExchangeObservation(epoch) })
+			return
+		}
+		s.expiryTimer = time.AfterFunc(delay, func() { s.invalidateExchangeObservation(epoch) })
+	}
+	s.emit(state)
+}
+
+// invalidateExchangeObservation clears current money without manufacturing a
+// zero-valued state or starting a venue/API retry. A coherent push restores it.
+func (s *ExchangeWatchStream) invalidateExchangeObservation(epoch uint64) {
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
+	if s.observationEpoch != epoch {
+		return
+	}
+	s.observationEpoch++
+	if s.expiryTimer != nil {
+		s.expiryTimer.Stop()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.value = ExchangeState{}
+	s.hasValue = false
+	s.state = WatchReconnecting
+drain:
+	for {
+		select {
+		case <-s.ch:
+		default:
+			break drain
+		}
+	}
+	s.notifyStateLocked(WatchReconnecting)
 }
 
 // FillWatchStream streams fills (preview + recorded) for an exchange object.
@@ -969,8 +1052,8 @@ type RealmExchangeUpdate struct {
 type RealmExchangeWatchStream struct {
 	*WatchStream[RealmExchangeUpdate]
 
-	emu     sync.Mutex
-	started bool
+	emu      sync.Mutex
+	started  bool
 	haveAuth bool
 }
 

@@ -222,17 +222,19 @@ type CreatePerpsExchangeOptions struct {
 }
 
 type PlaceOrderOptions struct {
-	Path        string
-	ObjectID    string
-	Market      string
-	Side        OrderSide
-	OrderType   string // "MARKET" or "LIMIT"
-	Size        string
-	Price       string
-	Leverage    *int
-	ReduceOnly  bool
-	Isolated    bool
-	TimeInForce string // "GTC" | "IOC" | "ALO"
+	Path         string
+	ObjectID     string
+	Market       string
+	Side         OrderSide
+	OrderType    string // "MARKET" or "LIMIT"
+	Size         string
+	Price        string
+	Leverage     *int
+	LeverageMode LeveragePreferenceMode // GLL-only allocation intent
+	SlippageBps  *int
+	ReduceOnly   bool
+	Isolated     bool
+	TimeInForce  string // "GTC" | "IOC" | "ALO"
 	// ApplicationFeeTenthsBps is the application's fee on this order in tenths
 	// of a basis point.
 	ApplicationFeeTenthsBps *int
@@ -447,6 +449,10 @@ type ModifyOrderOptions struct {
 }
 
 type UpdateLeverageOptions struct {
+	// GLL only. Venue-default omits Leverage; explicit fixed preserves intent at the cap.
+	Mode      LeveragePreferenceMode
+	CommandID string // optional retry identity; auto-generated once per GLL call
+
 	ObjectID string
 	Market   string
 	Leverage int

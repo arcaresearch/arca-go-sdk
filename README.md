@@ -10,11 +10,11 @@ streams.
 ## Install
 
 ```bash
-go get github.com/arcaresearch/arca-go-sdk@latest
+go get github.com/arcaresearch/arca-go-sdk/v2@latest
 ```
 
 ```go
-import arca "github.com/arcaresearch/arca-go-sdk"
+import arca "github.com/arcaresearch/arca-go-sdk/v2"
 ```
 
 Requires Go 1.23+. It's a public module published from
@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"log"
 
-	arca "github.com/arcaresearch/arca-go-sdk"
+	arca "github.com/arcaresearch/arca-go-sdk/v2"
 )
 
 func main() {

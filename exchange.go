@@ -102,8 +102,47 @@ func (a *Arca) UpdateLeverage(ctx context.Context, opts UpdateLeverageOptions) (
 	if err := a.ensureReady(ctx); err != nil {
 		return out, err
 	}
-	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/leverage",
-		map[string]any{"market": opts.Market, "leverage": opts.Leverage}, &out)
+	body := map[string]any{"market": opts.Market}
+	if opts.Mode != LeverageVenueDefault {
+		body["leverage"] = opts.Leverage
+	}
+	if opts.Mode != "" {
+		body["mode"] = opts.Mode
+	}
+	commandID := opts.CommandID
+	if commandID == "" && strings.HasPrefix(opts.Market, "gllt:") {
+		commandID = "allocation-" + generateOcoGroupID()
+	}
+	if commandID != "" {
+		body["commandId"] = commandID
+	}
+	err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/leverage", body, &out)
+	return out, err
+}
+
+// GetTradingAllocation reads GLL intent/capability and mirror allocation.
+// A missing projection is unavailable data, not zero buying power.
+func (a *Arca) GetTradingAllocation(ctx context.Context, objectID, market string) (TradingAllocationRead, error) {
+	var out TradingAllocationRead
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	params := url.Values{}
+	if market != "" {
+		params.Set("market", market)
+	}
+	err := a.client.get(ctx, "/objects/"+objectID+"/exchange/allocation", params, &out)
+	return out, err
+}
+
+// QuoteTradingAllocation estimates from one mirror observation. It reserves
+// nothing and never submits or resizes an order. Re-admission occurs on place.
+func (a *Arca) QuoteTradingAllocation(ctx context.Context, objectID string, request TradingAllocationQuoteRequest) (TradingAllocationQuote, error) {
+	var out TradingAllocationQuote
+	if err := a.ensureReady(ctx); err != nil {
+		return out, err
+	}
+	err := a.client.post(ctx, "/objects/"+objectID+"/exchange/allocation/quote", request, &out)
 	return out, err
 }
 
@@ -251,6 +290,12 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 		}
 		if opts.Leverage != nil {
 			body["leverage"] = *opts.Leverage
+		}
+		if opts.LeverageMode != "" {
+			body["leverageMode"] = opts.LeverageMode
+		}
+		if opts.SlippageBps != nil {
+			body["slippageBps"] = *opts.SlippageBps
 		}
 		if fee := opts.ApplicationFeeTenthsBps; fee != nil {
 			body["applicationFeeTenthsBps"] = *fee

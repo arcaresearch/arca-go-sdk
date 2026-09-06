@@ -10,16 +10,16 @@ Why a separate public repo instead of consuming `sdk/go` directly:
 
 - Go requires the import path to match a real VCS root. `github.com/arcaresearch/arca-go-sdk`
   resolves to the public mirror's root, so consumers just run
-  `go get github.com/arcaresearch/arca-go-sdk@vX.Y.Z`.
+  `go get github.com/arcaresearch/arca-go-sdk/v2@vX.Y.Z`.
 
 ## Consuming the SDK (for builders)
 
 ```bash
-go get github.com/arcaresearch/arca-go-sdk@latest
+go get github.com/arcaresearch/arca-go-sdk/v2@latest
 ```
 
 ```go
-import arca "github.com/arcaresearch/arca-go-sdk"
+import arca "github.com/arcaresearch/arca-go-sdk/v2"
 ```
 
 It's a public module, so no `GOPRIVATE` or auth is needed. It's licensed under

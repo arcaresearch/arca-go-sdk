@@ -19,7 +19,7 @@
 #     (no stored secret needed). For CI, see .github/workflows/sync-go-sdk.yml.
 #
 # Consumers then install with:
-#   go get github.com/arcaresearch/arca-go-sdk@<version>
+#   go get github.com/arcaresearch/arca-go-sdk/v2@<version>
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -48,4 +48,4 @@ if [[ -n "$VERSION" ]]; then
   git push "$REMOTE" "$TMP_BRANCH:refs/tags/$VERSION"
 fi
 
-echo "Done. Install with: go get github.com/arcaresearch/arca-go-sdk@${VERSION:-latest}"
+echo "Done. Install with: go get github.com/arcaresearch/arca-go-sdk/v2@${VERSION:-latest}"

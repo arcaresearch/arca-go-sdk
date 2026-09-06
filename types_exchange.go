@@ -354,14 +354,17 @@ type ExchangeIntent struct {
 }
 
 type ExchangeState struct {
-	Account                    SimAccount        `json:"account"`
-	MarginSummary              SimMarginSummary  `json:"marginSummary"`
-	CrossMarginSummary         *SimMarginSummary `json:"crossMarginSummary,omitempty"`
-	CrossMaintenanceMarginUsed string            `json:"crossMaintenanceMarginUsed,omitempty"`
-	Positions                  []SimPosition     `json:"positions"`
-	OpenOrders                 []SimOrder        `json:"openOrders"`
-	FeeRates                   *SimFeeRates      `json:"feeRates,omitempty"`
-	PendingIntents             []ExchangeIntent  `json:"pendingIntents"`
+	FinancialInputID           string                  `json:"financialInputId,omitempty"`
+	MirrorUnsettledFunding     string                  `json:"mirrorUnsettledFunding,omitempty"`
+	TradingAllocation          *TradingAllocationState `json:"tradingAllocation,omitempty"`
+	Account                    SimAccount              `json:"account"`
+	MarginSummary              SimMarginSummary        `json:"marginSummary"`
+	CrossMarginSummary         *SimMarginSummary       `json:"crossMarginSummary,omitempty"`
+	CrossMaintenanceMarginUsed string                  `json:"crossMaintenanceMarginUsed,omitempty"`
+	Positions                  []SimPosition           `json:"positions"`
+	OpenOrders                 []SimOrder              `json:"openOrders"`
+	FeeRates                   *SimFeeRates            `json:"feeRates,omitempty"`
+	PendingIntents             []ExchangeIntent        `json:"pendingIntents"`
 }
 
 type AssetFeeEntry struct {
@@ -386,12 +389,12 @@ type MarginTable struct {
 }
 
 type ActiveAssetData struct {
-	Market                string       `json:"market"`
-	Leverage              LeverageInfo `json:"leverage"`
-	MaxBuySize            string       `json:"maxBuySize"`
-	MaxSellSize           string       `json:"maxSellSize"`
-	MaxBuyUsd             string       `json:"maxBuyUsd"`
-	MaxSellUsd            string       `json:"maxSellUsd"`
+	Market      string       `json:"market"`
+	Leverage    LeverageInfo `json:"leverage"`
+	MaxBuySize  string       `json:"maxBuySize"`
+	MaxSellSize string       `json:"maxSellSize"`
+	MaxBuyUsd   string       `json:"maxBuyUsd"`
+	MaxSellUsd  string       `json:"maxSellUsd"`
 	// MaxBuyReduceSize / MaxBuyOpenSize (and the sell pair) break MaxBuySize /
 	// MaxSellSize into the part that reduces the open position and the part
 	// that opens new exposure: MaxBuySize == MaxBuyReduceSize + MaxBuyOpenSize.
@@ -412,8 +415,8 @@ type ActiveAssetData struct {
 	// cross *maintenance* margin — maintenance is the lower requirement, so
 	// Withdrawable is normally larger and this value can go negative while the
 	// account is still solvent.
-	AvailableToTrade string `json:"availableToTrade"`
-	MarkPx           string `json:"markPx"`
+	AvailableToTrade      string       `json:"availableToTrade"`
+	MarkPx                string       `json:"markPx"`
 	FeeRate               string       `json:"feeRate"`
 	MaintenanceMarginRate string       `json:"maintenanceMarginRate"`
 	MarginTiers           []MarginTier `json:"marginTiers,omitempty"`
@@ -426,16 +429,25 @@ type ActiveAssetData struct {
 }
 
 type UpdateLeverageResponse struct {
-	AccountID        string `json:"accountId"`
-	Market           string `json:"market"`
-	Leverage         int    `json:"leverage"`
-	PreviousLeverage int    `json:"previousLeverage"`
+	AccountID string `json:"accountId"`
+	Market    string `json:"market"`
+	// Nil only when GLL's applicable risk is unavailable; never treat as zero.
+	Leverage              *int                   `json:"leverage"`
+	PreviousLeverage      *int                   `json:"previousLeverage"`
+	Mode                  LeveragePreferenceMode `json:"mode,omitempty"`
+	IntendedLeverage      *int                   `json:"intendedLeverage,omitempty"`
+	Revision              string                 `json:"revision,omitempty"`
+	ProjectionUnavailable bool                   `json:"projectionUnavailable,omitempty"`
+	CommandID             string                 `json:"commandId,omitempty"`
 }
 
 type LeverageSetting struct {
-	Market     string     `json:"market"`
-	Leverage   int        `json:"leverage"`
-	MarginMode MarginMode `json:"marginMode"`
+	Market           string                 `json:"market"`
+	Leverage         *int                   `json:"leverage"`
+	MarginMode       MarginMode             `json:"marginMode"`
+	Mode             LeveragePreferenceMode `json:"mode,omitempty"`
+	IntendedLeverage *int                   `json:"intendedLeverage,omitempty"`
+	InputID          string                 `json:"inputId,omitempty"`
 }
 
 // UpdateIsolatedMarginResponse is returned by UpdateIsolatedMargin: the
