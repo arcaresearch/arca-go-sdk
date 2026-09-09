@@ -1257,7 +1257,21 @@ func (m *WebSocketManager) watchPath(ctx context.Context, path string) (*WatchSn
 	m.pathRefs[path] = m.pathRefs[path] + 1
 	m.mu.Unlock()
 	m.EnsureConnected()
+	return m.requestPathSnapshot(ctx, path)
+}
 
+// recoverPathReady requests a fresh correlated snapshot without another lease.
+func (m *WebSocketManager) recoverPathReady(ctx context.Context, path string) (*WatchSnapshot, error) {
+	m.mu.Lock()
+	owned := m.pathRefs[path] > 0
+	m.mu.Unlock()
+	if !owned {
+		return nil, &ArcaError{Code: "WATCH_NOT_OWNED", Message: "recovery requires an owned path watch"}
+	}
+	return m.requestPathSnapshot(ctx, path)
+}
+
+func (m *WebSocketManager) requestPathSnapshot(ctx context.Context, path string) (*WatchSnapshot, error) {
 	reqID := "watch-" + m.newRequestID()
 	ch := m.registerPending(reqID)
 	var sendMu sync.Mutex
@@ -1293,6 +1307,16 @@ func (m *WebSocketManager) watchPath(ctx context.Context, path string) (*WatchSn
 	case raw, ok := <-ch:
 		if !ok {
 			return nil, &ArcaError{Code: "WS_DISCONNECTED", Message: "websocket disconnected"}
+		}
+		var response struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return nil, err
+		}
+		if response.Type == "error" {
+			return nil, &ArcaError{Code: "WS_ERROR", Message: response.Message}
 		}
 		var snap WatchSnapshot
 		if err := json.Unmarshal(raw, &snap); err != nil {

@@ -270,3 +270,13 @@ operation before requesting account-scoped history. It rejects a different accou
 and never submits a replacement. `Filled` retains its full-order return type and
 performs a metadata read after execution; unavailable or stale details remain an
 error. Use `ExecutionReceipt` for prompt confirmation.
+## Operation wait recovery
+
+`WaitForOperation` listens before acquiring its subscription. Startup and actual
+stream gaps, reauthentication, or sparse operation notifications request a fresh,
+correlated acknowledgement before reading the operation. A failed acknowledgement
+or read gets at most three attempts per recovery; a healthy pending operation
+stays on the stream without periodic reads. A terminal push can complete during
+acknowledgement or snapshot recovery. Timeout stops the wait and preserves the
+original operation identity; it never submits a replacement operation.
+

@@ -356,10 +356,6 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 	}
 	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	watchDone := make(chan struct{})
-	a.ws.EnsureConnected()
-	go func() { defer close(watchDone); _, _ = a.ws.watchPath(deadlineCtx, "/") }()
-	defer func() { cancel(); go func() { <-watchDone; a.ws.unwatchPath("/") }() }()
 
 	resultCh := make(chan *Operation, 1)
 	errCh := make(chan error, 1)
@@ -368,7 +364,7 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 	var lastOp *Operation
 
 	tryResolve := func(o *Operation) {
-		if o == nil {
+		if o == nil || o.ID != operationID {
 			return
 		}
 		lastMu.Lock()
@@ -385,36 +381,94 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 			}
 		}
 	}
-	var fetching atomic.Bool
-	fetchAndResolve := func() {
-		if settled.Load() || !fetching.CompareAndSwap(false, true) {
-			return
-		}
-		defer fetching.Store(false)
-
-		var detail OperationDetailResponse
-		if err := a.client.get(deadlineCtx, "/operations/"+operationID, nil, &detail); err == nil {
-			tryResolve(&detail.Operation)
+	requests := make(chan struct{}, 1)
+	var revision atomic.Uint64
+	recover := func() {
+		revision.Add(1)
+		select {
+		case requests <- struct{}{}:
+		default:
 		}
 	}
-
-	unsub := a.ws.OnOperationUpdated(func(o *Operation, ev RealmEvent) {
-		if ev.EntityID != operationID {
-			return
+	handler := func(ev RealmEvent) {
+		if ev.Operation != nil {
+			tryResolve(ev.Operation)
+		} else if ev.EntityID == operationID {
+			recover()
 		}
-		if o != nil {
-			tryResolve(o)
-		} else {
-			go fetchAndResolve()
-		}
-	})
-	defer unsub()
-	offGap := a.ws.OnGap(func(int64) { go fetchAndResolve() })
+	}
+	// Install every listener before transport interest can deliver a snapshot.
+	offUpdated := a.ws.On(EventOperationUpdated, handler)
+	defer offUpdated()
+	offCreated := a.ws.On(EventOperationCreated, handler)
+	defer offCreated()
+	offGap := a.ws.OnGap(func(int64) { recover() })
 	defer offGap()
-	offAuth := a.ws.OnAuthenticated(func() { go fetchAndResolve() })
+	offAuth := a.ws.OnAuthenticated(recover)
 	defer offAuth()
-
-	go fetchAndResolve()
+	workerDone := make(chan struct{})
+	defer func() { cancel(); <-workerDone }()
+	recover()
+	go func() {
+		defer close(workerDone)
+		acquired := false
+		defer func() {
+			if acquired {
+				a.ws.unwatchPath("/")
+			}
+		}()
+		var completed uint64
+		for {
+			select {
+			case <-deadlineCtx.Done():
+				return
+			case <-requests:
+			}
+			if settled.Load() || revision.Load() <= completed {
+				continue
+			}
+			covered := revision.Load()
+			for attempt := 0; attempt < 3; attempt++ {
+				ackCtx, ackCancel := context.WithTimeout(deadlineCtx, time.Second)
+				var ackErr error
+				if !acquired {
+					acquired = true
+					_, ackErr = a.ws.watchPath(ackCtx, "/")
+				} else {
+					_, ackErr = a.ws.recoverPathReady(ackCtx, "/")
+				}
+				ackCancel()
+				if deadlineCtx.Err() != nil || settled.Load() {
+					return
+				}
+				covered = revision.Load()
+				var detail OperationDetailResponse
+				err := a.client.get(deadlineCtx, "/operations/"+operationID, nil, &detail)
+				if deadlineCtx.Err() != nil || settled.Load() {
+					return
+				}
+				if err == nil && detail.Operation.ID == operationID {
+					tryResolve(&detail.Operation)
+					if settled.Load() {
+						return
+					}
+					if ackErr == nil {
+						break
+					} // healthy pending state stays on the stream
+				}
+				if attempt < 2 {
+					timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+					select {
+					case <-deadlineCtx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+				}
+			}
+			completed = covered
+		}
+	}()
 
 	for {
 		select {
