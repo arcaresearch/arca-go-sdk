@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"sync"
 	"time"
 )
@@ -89,7 +90,9 @@ func (h *OperationHandle[T]) Wait(ctx context.Context) (T, error) {
 	r, e := h.settle(ctx, h.defaultTimeout)
 
 	h.settleMu.Lock()
-	h.settleDone = true
+	// A caller deadline or temporary read failure is not cached as settlement.
+	// The same handle can resume confirmation without resubmitting its mutation.
+	h.settleDone = e == nil
 	h.settled = r
 	h.settleErr = e
 	h.settleMu.Unlock()
@@ -137,6 +140,7 @@ type OrderHandle struct {
 
 	objectID      string
 	placementPath string
+	immediate     bool
 	deps          orderHandleDeps
 }
 
@@ -149,9 +153,12 @@ func newOrderHandle(
 }
 
 func (h *OrderHandle) resolveOrderID(ctx context.Context) (string, error) {
-	resp, err := h.Submitted(ctx)
+	resp, err := h.Wait(ctx)
 	if err != nil {
 		return "", err
+	}
+	if id, ok := resp.Operation.ParsedOutcome["orderId"].(string); ok && id != "" {
+		return id, nil
 	}
 	if resp.Operation.Outcome != nil && *resp.Operation.Outcome != "" {
 		var parsed struct {
@@ -162,6 +169,29 @@ func (h *OrderHandle) resolveOrderID(ctx context.Context) (string, error) {
 		}
 	}
 	return resp.Operation.ID, nil
+}
+
+// Confirmed waits for execution of immediate orders and placement of intentional
+// resting orders. The account's venue is irrelevant to this contract. A timeout
+// returns the submission response plus an error; it never re-submits the trade.
+func (h *OrderHandle) Confirmed(ctx context.Context) (OrderOperationResponse, error) {
+	resp, err := h.Submitted(ctx)
+	if err != nil {
+		return resp, err
+	}
+	if !h.immediate {
+		return h.Wait(ctx)
+	}
+	filled, err := h.Filled(ctx)
+	if err != nil {
+		return resp, err
+	}
+	out := filled.ExecutionOutcome()
+	resp.Operation.ParsedOutcome = out
+	raw, _ := json.Marshal(out)
+	text := string(raw)
+	resp.Operation.Outcome = &text
+	return resp, nil
 }
 
 // resolveCloid returns the order's client id from the placement outcome. A
@@ -386,4 +416,55 @@ func AsOperationFailed(err error) (*OperationFailedError, bool) {
 		return e, true
 	}
 	return nil, false
+}
+
+// executionDisposition describes what is known without treating acceptance or
+// a working partial fill as terminal. Amounts are decimal strings, never float64.
+func executionDisposition(order SimOrder) (string, string) {
+	filled, ok := new(big.Rat).SetString(order.FilledSize)
+	if !ok || filled.Sign() < 0 {
+		return "unknown", "unknown"
+	}
+	switch order.Status {
+	case OrderFilled:
+		if filled.Sign() > 0 {
+			return "filled", "filled"
+		}
+		return "unknown", "unknown"
+	case OrderCancelled:
+		if filled.Sign() > 0 {
+			return "partial", "cancelled"
+		}
+		return "no_fill", "cancelled"
+	case OrderFailed:
+		if filled.Sign() > 0 {
+			return "partial", "cancelled"
+		}
+		return "rejected", "cancelled"
+	default:
+		return "pending", "working"
+	}
+}
+
+// ExecutionOutcome normalizes exact order evidence for confirmation and recovery.
+// Unknown or malformed quantities cannot become a definitive execution verdict.
+func (filled SimOrderWithFills) ExecutionOutcome() map[string]any {
+	out := make(map[string]any)
+	out["orderId"] = filled.Order.ID
+	out["status"] = string(filled.Order.Status)
+	out["filledSize"] = filled.Order.FilledSize
+	out["executionState"], out["remainingDisposition"] = executionDisposition(filled.Order)
+	if out["executionState"] == "unknown" {
+		out["status"] = "UNKNOWN"
+	}
+	if filled.FillsComplete != nil {
+		out["fillsComplete"] = *filled.FillsComplete
+	}
+	if len(filled.Fills) > 0 {
+		out["fills"] = filled.Fills
+	}
+	if filled.Order.AvgFillPrice != nil {
+		out["avgFillPrice"] = *filled.Order.AvgFillPrice
+	}
+	return out
 }

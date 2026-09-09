@@ -52,9 +52,12 @@ func asError[T error](err error, target *T) bool {
 //	var ae *arca.ArcaError
 //	if errors.As(err, &ae) && ae.Code == "IDEMPOTENCY_VIOLATION" { ... }
 type ArcaError struct {
-	Code    string
-	Message string
-	ErrorID string
+	// Details preserves the platform refusal payload for every error code.
+	Details    map[string]any
+	StatusCode int
+	Code       string
+	Message    string
+	ErrorID    string
 }
 
 func (e *ArcaError) Error() string {
@@ -417,6 +420,7 @@ func parseStepUpChallenge(details map[string]any) *StepUpChallenge {
 // mapAPIError maps an API error envelope to a typed SDK error.
 func mapAPIError(code, message, errorID string, details map[string]any) error {
 	base := newArcaError(code, message, errorID)
+	base.Details = details
 	switch code {
 	case "VALIDATION_ERROR":
 		return &ValidationError{base}

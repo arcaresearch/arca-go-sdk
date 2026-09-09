@@ -37,10 +37,12 @@ type EnsureDeletedOptions struct {
 }
 
 type TransferOptions struct {
-	Path   string
-	From   string
-	To     string
-	Amount string
+	// DrainPositions explicitly authorizes closing positions before transfer.
+	DrainPositions bool
+	Path           string
+	From           string
+	To             string
+	Amount         string
 	// FeeOverride overrides the transfer fee (e.g. "0"); non-production realms only.
 	FeeOverride *string
 }

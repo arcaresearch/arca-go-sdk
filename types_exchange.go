@@ -1,5 +1,7 @@
 package arca
 
+import "encoding/json"
+
 // ---- Exchange / Perps ----
 
 type OrderSide string
@@ -212,8 +214,9 @@ type SimFill struct {
 }
 
 type SimOrderWithFills struct {
-	Order SimOrder  `json:"order"`
-	Fills []SimFill `json:"fills"`
+	FillsComplete *bool     `json:"fillsComplete,omitempty"`
+	Order         SimOrder  `json:"order"`
+	Fills         []SimFill `json:"fills"`
 }
 
 type FundingPayment struct {
@@ -389,12 +392,13 @@ type MarginTable struct {
 }
 
 type ActiveAssetData struct {
-	Market      string       `json:"market"`
-	Leverage    LeverageInfo `json:"leverage"`
-	MaxBuySize  string       `json:"maxBuySize"`
-	MaxSellSize string       `json:"maxSellSize"`
-	MaxBuyUsd   string       `json:"maxBuyUsd"`
-	MaxSellUsd  string       `json:"maxSellUsd"`
+	AvailableToTradeRaw json.RawMessage `json:"-"`
+	Market              string          `json:"market"`
+	Leverage            LeverageInfo    `json:"leverage"`
+	MaxBuySize          string          `json:"maxBuySize"`
+	MaxSellSize         string          `json:"maxSellSize"`
+	MaxBuyUsd           string          `json:"maxBuyUsd"`
+	MaxSellUsd          string          `json:"maxSellUsd"`
 	// MaxBuyReduceSize / MaxBuyOpenSize (and the sell pair) break MaxBuySize /
 	// MaxSellSize into the part that reduces the open position and the part
 	// that opens new exposure: MaxBuySize == MaxBuyReduceSize + MaxBuyOpenSize.

@@ -343,7 +343,7 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 		return nil, err
 	}
 	a.ws.EnsureConnected()
-	go func() { _, _ = a.ws.watchPath(context.Background(), "/") }()
+	go func() { _, _ = a.ws.watchPath(ctx, "/") }()
 	defer a.ws.unwatchPath("/")
 
 	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -401,13 +401,10 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 		select {
 		case <-deadlineCtx.Done():
 			timeoutMS := timeout.Milliseconds()
-			var detail OperationDetailResponse
-			fetchCtx, fc := context.WithTimeout(context.Background(), 5*time.Second)
-			err := a.client.get(fetchCtx, "/operations/"+operationID, nil, &detail)
-			fc()
-			if err == nil {
-				snap := detail.Operation.snapshot()
-				return nil, newOperationStalledError(operationID, timeoutMS, &snap)
+			// A deadline ends the wait. Do not add a detached post-deadline
+			// network read or convert uncertainty into a failed operation.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
 			lastMu.Lock()
 			lo := lastOp

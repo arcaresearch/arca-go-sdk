@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -59,6 +60,39 @@ type apiResponse struct {
 	Success bool              `json:"success"`
 	Data    json.RawMessage   `json:"data"`
 	Error   *apiResponseError `json:"error"`
+}
+
+// UnmarshalJSON accepts both platform error envelope generations.
+func (e *apiResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Success bool            `json:"success"`
+		Data    json.RawMessage `json:"data"`
+		Error   json.RawMessage `json:"error"`
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+		ErrorID string          `json:"errorId"`
+		Details map[string]any  `json:"details"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	e.Success, e.Data = wire.Success, wire.Data
+	if len(wire.Error) > 0 && string(wire.Error) != "null" {
+		if wire.Error[0] == '{' {
+			return json.Unmarshal(wire.Error, &e.Error)
+		}
+		var message string
+		if err := json.Unmarshal(wire.Error, &message); err != nil {
+			return err
+		}
+		if wire.Message == "" {
+			wire.Message = message
+		}
+	}
+	if wire.Code != "" || wire.Message != "" {
+		e.Error = &apiResponseError{Code: wire.Code, Message: wire.Message, ErrorID: wire.ErrorID, Details: wire.Details}
+	}
+	return nil
 }
 
 type apiResponseError struct {
@@ -248,7 +282,7 @@ func (c *httpClient) requestWithRetry(ctx context.Context, method, path string, 
 			return nil
 		}
 		lastErr = err
-		if !isTransient(err) || attempt == maxRetries {
+		if method != http.MethodGet && method != http.MethodHead || !isTransient(err) || attempt == maxRetries {
 			return err
 		}
 		select {
@@ -299,14 +333,25 @@ func (c *httpClient) requestOnce(ctx context.Context, method, path string, param
 	defer resp.Body.Close()
 
 	if transientStatuses[resp.StatusCode] {
-		io.Copy(io.Discard, resp.Body)
-		return &transientError{status: resp.StatusCode}
+		// Preserve typed refusals, including details, even on gateway statuses.
+		// Only reads may retry; mutations can already have reached the venue.
+		err := c.unwrap(resp, out)
+		if err == nil {
+			err = newArcaError("HTTP_ERROR", fmt.Sprintf("HTTP %d", resp.StatusCode), "")
+		}
+		return &transientError{status: resp.StatusCode, err: err}
 	}
 
 	return c.unwrap(resp, out)
 }
 
-func (c *httpClient) unwrap(resp *http.Response, out any) error {
+func (c *httpClient) unwrap(resp *http.Response, out any) (result error) {
+	defer func() {
+		var apiErr *ArcaError
+		if errors.As(result, &apiErr) {
+			apiErr.StatusCode = resp.StatusCode
+		}
+	}()
 	text, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err

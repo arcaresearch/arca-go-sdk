@@ -24,6 +24,9 @@ func (a *Arca) Transfer(ctx context.Context, opts TransferOptions) *OperationHan
 			"targetArcaPath": opts.To,
 			"amount":         opts.Amount,
 		}
+		if opts.DrainPositions {
+			body["drainPositions"] = true
+		}
 		if opts.FeeOverride != nil {
 			body["feeOverride"] = *opts.FeeOverride
 		}

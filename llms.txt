@@ -337,3 +337,13 @@ Merged chart streams (WatchEquityChart/WatchPnlChart/WatchCandleChart) and the
 derived WatchMaxOrderSize are not in this release. Use GetEquityHistory,
 GetPnlHistory, GetCandles plus the arca ladder helpers (PickResolution,
 BucketMs, ComputeChartRange) and WatchAggregation to build equivalent behavior.
+
+Account contract: use OrderHandle.Confirmed(ctx) for immediate execution or
+intentional resting placement, Submitted for HTTP acknowledgement, Wait for
+operation settlement. Never resubmit an uncertain mutation. GetOperationOrder
+reads the original account/order; ReconcileOrderKey can only certify absence
+through a durable supported fence. GetExchangeCapabilities replaces builder
+venue conditionals. Mutations do not retry network/502/503/504; ArcaError retains
+StatusCode and Details. Projection endpoints, PatchObjectLabels and scalar/pair
+ActiveAssetData.AvailableToTradeRaw are supported. Decimal money must remain
+exact; missing evidence is unknown, not zero.

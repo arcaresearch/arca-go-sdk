@@ -230,3 +230,22 @@ GOWORK=off go vet ./...
 Licensed under the [PolyForm Shield License 1.0.0](./LICENSE). You may use,
 modify, and redistribute this SDK for any purpose **except** building a product
 or service that competes with Arca. See the LICENSE file for the full terms.
+
+## Account-based execution confirmation
+
+Use `PlaceOrder(...).Confirmed(ctx)` with a deadline when presenting an execution
+result. MARKET/IOC/FOK waits for terminal order evidence; intentional resting
+limits wait only for placement. `Submitted` is the HTTP acknowledgement and
+`Wait` is operation settlement, neither alone guarantees a fill. Confirmation
+never replays a trade. Keep its operation/path identity and use
+`GetOperationOrder` or `ReconcileOrderKey` to recover unavailable outcomes.
+Terminal partial fills retain cancelled remainder disposition and exact filled
+quantity; fee evidence includes `fillsComplete` when the adapter can certify it.
+
+Mutations are single-send on network/gateway failures. SDK errors preserve
+`ArcaError.StatusCode` and `Details`, including legacy envelopes. Read retries
+remain bounded. `GetExchangeCapabilities` exposes authoritative account feature
+support; consumers must not infer features from market prefixes or venue names.
+
+The normative ownership and evolution policy lives in the Arca monorepo at
+`documents/contracts/builder-sdk-golden-contract.md`.

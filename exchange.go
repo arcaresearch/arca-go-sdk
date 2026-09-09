@@ -344,7 +344,9 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 			return a.waitForOperation(c, id, t)
 		},
 		nil, 0)
-	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	handle := newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	handle.immediate = !opts.IsTrigger && (opts.OrderType == "" || strings.EqualFold(opts.OrderType, "MARKET") || strings.EqualFold(opts.TimeInForce, "IOC") || strings.EqualFold(opts.TimeInForce, "FOK"))
+	return handle
 }
 
 // ListOrders lists orders for an exchange object, optionally filtered by status.
@@ -839,6 +841,7 @@ func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (Op
 		entryOutcome = parsed.Orders[0]
 	}
 	result.Entry = buildLeg(entryOutcome)
+	result.Entry.immediate = strings.EqualFold(opts.OrderType, "MARKET") || opts.OrderType == ""
 	if opts.TakeProfitPx != "" {
 		result.TakeProfit = buildLeg(legByTpsl("tp"))
 	}

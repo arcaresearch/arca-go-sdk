@@ -80,13 +80,24 @@ func (a *Arca) EnsureDeleted(ctx context.Context, opts EnsureDeletedOptions) *Op
 
 // GetObject fetches an Arca object by path.
 func (a *Arca) GetObject(ctx context.Context, path string) (ArcaObject, error) {
-	var out ArcaObject
+	var out struct {
+		ArcaObject
+		Wrapped *ArcaObject `json:"object"`
+	}
 	rid, err := a.realmID(ctx)
 	if err != nil {
-		return out, err
+		return ArcaObject{}, err
 	}
-	err = a.client.get(ctx, "/objects/by-path", url.Values{"realmId": {rid}, "path": {path}}, &out)
-	return out, err
+	if err := a.client.get(ctx, "/objects/by-path", url.Values{"realmId": {rid}, "path": {path}}, &out); err != nil {
+		return ArcaObject{}, err
+	}
+	if out.Wrapped != nil && out.Wrapped.ID != "" {
+		return *out.Wrapped, nil
+	}
+	if out.ArcaObject.ID == "" {
+		return ArcaObject{}, newArcaError("OBJECT_INVALID", "Object response has no identity", "")
+	}
+	return out.ArcaObject, nil
 }
 
 // GetObjectDetail fetches an Arca object's full detail by id.
