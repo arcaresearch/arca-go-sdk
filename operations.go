@@ -2,9 +2,11 @@ package arca
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -179,60 +181,119 @@ func (a *Arca) CheckInvariants(ctx context.Context, limit int, realmID string) (
 	return out, err
 }
 
-// WaitForQuiescence blocks until every operation in the realm is terminal,
-// reacting to WebSocket events with a periodic REST safety poll.
+// WaitForQuiescence seeds the realm once and consumes operation payloads.
+// pollInterval is retained for source compatibility and no longer schedules reads.
+// onPoll reports pending counts after snapshots or pushed changes. A real stream
+// gap or reauthentication triggers one bounded, paginated recovery snapshot.
 func (a *Arca) WaitForQuiescence(ctx context.Context, pollInterval time.Duration, onPoll func(pending int)) error {
 	if err := a.ensureReady(ctx); err != nil {
 		return err
 	}
-	if pollInterval <= 0 {
-		pollInterval = 5 * time.Second
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var mu sync.Mutex
+	var queued []Operation
+	wake := make(chan struct{}, 1)
+	recoverSnapshot := make(chan struct{}, 1)
+	signal := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
 	}
+	receive := func(ev RealmEvent) {
+		if ev.Operation == nil {
+			return
+		}
+		mu.Lock()
+		queued = append(queued, *ev.Operation)
+		mu.Unlock()
+		signal()
+	}
+	offCreated := a.ws.On(EventOperationCreated, receive)
+	defer offCreated()
+	offUpdated := a.ws.On(EventOperationUpdated, receive)
+	defer offUpdated()
+	recoverOnce := func() {
+		select {
+		case recoverSnapshot <- struct{}{}:
+		default:
+		}
+	}
+	offGap := a.ws.OnGap(func(int64) { recoverOnce() })
+	defer offGap()
 	a.ws.EnsureConnected()
-	go func() { _, _ = a.ws.watchPath(context.Background(), "/") }()
+	if _, err := a.ws.watchPath(ctx, "/"); err != nil {
+		a.ws.unwatchPath("/")
+		return err
+	}
 	defer a.ws.unwatchPath("/")
-
-	checkPending := func() (int, error) {
-		res, err := a.ListOperations(ctx, nil)
-		if err != nil {
-			return 0, err
+	offAuth := a.ws.OnAuthenticated(recoverOnce)
+	defer offAuth()
+	states := map[string]Operation{}
+	apply := func(op Operation) {
+		old, exists := states[op.ID]
+		// Terminal execution never regresses on replay or an older page snapshot.
+		if exists && old.State != OpPending {
+			return
+		}
+		if exists && old.UpdatedAt > op.UpdatedAt && op.State == OpPending {
+			return
+		}
+		states[op.ID] = op
+	}
+	seed := func() error {
+		cursor := ""
+		seen := map[string]bool{}
+		for {
+			page, err := a.ListOperations(ctx, &ListOperationsOptions{Limit: 100, Cursor: cursor})
+			if err != nil {
+				return err
+			}
+			for _, op := range page.Operations {
+				apply(op)
+			}
+			if page.NextCursor == "" {
+				return nil
+			}
+			if seen[page.NextCursor] {
+				return fmt.Errorf("operation pagination repeated cursor")
+			}
+			seen[page.NextCursor] = true
+			cursor = page.NextCursor
+		}
+	}
+	if err := seed(); err != nil {
+		return err
+	}
+	for {
+		mu.Lock()
+		batch := queued
+		queued = nil
+		mu.Unlock()
+		for _, op := range batch {
+			apply(op)
 		}
 		pending := 0
-		for _, o := range res.Operations {
-			if o.State == OpPending {
+		for _, op := range states {
+			if op.State == OpPending {
 				pending++
 			}
 		}
 		if onPoll != nil {
 			onPoll(pending)
 		}
-		return pending, nil
-	}
-
-	if p, err := checkPending(); err == nil && p == 0 {
-		return nil
-	}
-
-	updates := make(chan struct{}, 8)
-	unsub := a.ws.OnOperationUpdated(func(_ *Operation, _ RealmEvent) {
-		select {
-		case updates <- struct{}{}:
-		default:
+		if pending == 0 {
+			return nil
 		}
-	})
-	defer unsub()
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-updates:
-		case <-ticker.C:
-		}
-		if p, err := checkPending(); err == nil && p == 0 {
-			return nil
+		case <-wake:
+		case <-recoverSnapshot:
+			if err := seed(); err != nil {
+				return err
+			}
 		}
 	}
 }

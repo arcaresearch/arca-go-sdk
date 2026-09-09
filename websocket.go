@@ -1260,7 +1260,32 @@ func (m *WebSocketManager) watchPath(ctx context.Context, path string) (*WatchSn
 
 	reqID := "watch-" + m.newRequestID()
 	ch := m.registerPending(reqID)
-	m.sendWhenConnected(map[string]any{"action": "watch", "path": path, "requestId": reqID})
+	var sendMu sync.Mutex
+	active := true
+	sendWatch := func() {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		if active && ctx.Err() == nil {
+			m.send(map[string]any{"action": "watch", "path": path, "requestId": reqID})
+		}
+	}
+	cancelDeferred := m.onAuthenticatedOnce(sendWatch)
+	defer func() {
+		sendMu.Lock()
+		active = false
+		sendMu.Unlock()
+		cancelDeferred()
+		m.mu.Lock()
+		delete(m.pending, reqID)
+		m.mu.Unlock()
+	}()
+	m.mu.Lock()
+	connected := m.status == StatusConnected
+	m.mu.Unlock()
+	if connected {
+		cancelDeferred()
+		sendWatch()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -1309,7 +1334,7 @@ func (m *WebSocketManager) sendWhenConnected(msg any) {
 // removes itself. It deregisters by the id it holds rather than by an unsub
 // closure the handler would have to read back, which the delivery goroutine can
 // reach before the registering one has stored it.
-func (m *WebSocketManager) onAuthenticatedOnce(handler func()) {
+func (m *WebSocketManager) onAuthenticatedOnce(handler func()) func() {
 	m.mu.Lock()
 	id := m.nextListenerID
 	m.nextListenerID++
@@ -1323,6 +1348,7 @@ func (m *WebSocketManager) onAuthenticatedOnce(handler func()) {
 		}
 	}
 	m.mu.Unlock()
+	return func() { m.mu.Lock(); delete(m.authList, id); m.mu.Unlock() }
 }
 
 // ---- Mids / candles / trades subscriptions ----

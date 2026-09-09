@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"regexp"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -110,7 +113,13 @@ func (h *OperationHandle[T]) settle(ctx context.Context, timeout time.Duration) 
 		return resp, err
 	}
 	op := h.opOf(resp)
-	if op == nil || op.State != OpPending {
+	if op == nil {
+		return resp, nil
+	}
+	if op.State == OpFailed || op.State == OpExpired {
+		return resp, newOperationFailedError(op.snapshot())
+	}
+	if op.State != OpPending {
 		return resp, nil
 	}
 	completed, err := h.waitFn(ctx, op.ID, timeout)
@@ -125,11 +134,16 @@ func (h *OperationHandle[T]) settle(ctx context.Context, timeout time.Duration) 
 // ---- OrderHandle ----
 
 type orderHandleDeps struct {
-	getOrder    func(ctx context.Context, objectID, orderID string) (SimOrderWithFills, error)
-	onFillEvent func(handler func(RealmEvent)) func()
-	cancelOrder func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse]
-	modifyOrder func(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse]
-	listFills   func(ctx context.Context, objectID string) (FillListResponse, error)
+	releaseExecution      func()
+	awaitExecutionReady   func(context.Context) error
+	recoverExecutionReady func(context.Context) error
+	onExecutionGap        func(func()) func()
+	getOrder              func(ctx context.Context, objectID, orderID string) (SimOrderWithFills, error)
+	onExecutionEvent      func(handler func(RealmEvent)) func()
+	onFillEvent           func(handler func(RealmEvent)) func()
+	cancelOrder           func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse]
+	modifyOrder           func(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse]
+	listFills             func(ctx context.Context, objectID string) (FillListResponse, error)
 }
 
 // OrderHandle extends OperationHandle for the order lifecycle. Wait means "the
@@ -182,11 +196,11 @@ func (h *OrderHandle) Confirmed(ctx context.Context) (OrderOperationResponse, er
 	if !h.immediate {
 		return h.Wait(ctx)
 	}
-	filled, err := h.Filled(ctx)
+	filled, err := h.ExecutionReceipt(ctx)
 	if err != nil {
 		return resp, err
 	}
-	out := filled.ExecutionOutcome()
+	out := filled.Outcome()
 	resp.Operation.ParsedOutcome = out
 	raw, _ := json.Marshal(out)
 	text := string(raw)
@@ -231,98 +245,282 @@ func fillMatches(f *SimFill, orderID, cloid string) bool {
 }
 
 func isTerminalOrderStatus(s OrderStatus) bool {
+	s = normalizeExecutionStatus(s)
 	return s == OrderFilled || s == OrderCancelled || s == OrderFailed
+}
+
+func normalizeExecutionStatus(s OrderStatus) OrderStatus {
+	switch strings.ToUpper(string(s)) {
+	case "CANCELED", "EXPIRED":
+		return OrderCancelled
+	case "REJECTED":
+		return OrderFailed
+	default:
+		return OrderStatus(strings.ToUpper(string(s)))
+	}
 }
 
 // Filled waits for the order to reach a terminal status (FILLED/CANCELLED/
 // FAILED) and returns the order with all its fills. It honors ctx for
 // cancellation; LIMIT orders may never fill, so pass a deadline-bound ctx.
-func (h *OrderHandle) Filled(ctx context.Context) (SimOrderWithFills, error) {
+func (h *OrderHandle) waitExecutionEvidence(ctx context.Context) (SimOrderWithFills, error) {
 	var zero SimOrderWithFills
-	if _, err := h.Wait(ctx); err != nil {
-		return zero, err
+	var mu sync.Mutex
+	var events []RealmEvent
+	wake := make(chan struct{}, 1)
+	recovery := make(chan struct{}, 1)
+	if h.deps.onExecutionGap != nil {
+		off := h.deps.onExecutionGap(func() {
+			select {
+			case recovery <- struct{}{}:
+			default:
+			}
+		})
+		defer off()
 	}
-	orderID, err := h.resolveOrderID(ctx)
+	listen := h.deps.onExecutionEvent
+	if listen == nil {
+		listen = h.deps.onFillEvent
+	}
+	if listen != nil {
+		unsub := listen(func(ev RealmEvent) {
+			if ev.Order == nil && ev.Operation == nil {
+				return
+			}
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		})
+		defer unsub()
+	}
+	settled, err := h.Submitted(ctx)
 	if err != nil {
 		return zero, err
 	}
-
-	check := func() (SimOrderWithFills, bool) {
-		res, err := h.deps.getOrder(ctx, h.objectID, orderID)
-		if err != nil {
-			return zero, false
-		}
-		if isTerminalOrderStatus(res.Order.Status) {
-			return res, true
-		}
-		return zero, false
+	if settled.Operation.State == OpFailed || settled.Operation.State == OpExpired {
+		return zero, newOperationFailedError(settled.Operation.snapshot())
 	}
-
-	if res, ok := check(); ok {
-		return res, nil
+	if execution, known := operationExecution(settled.Operation, h.objectID); known {
+		return execution, nil
 	}
-
-	fillCh := make(chan struct{}, 16)
-	unsub := h.deps.onFillEvent(func(ev RealmEvent) {
-		select {
-		case fillCh <- struct{}{}:
-		default:
+	orderID, _ := settled.Operation.ParsedOutcome["orderId"].(string)
+	if settled.Operation.Outcome != nil {
+		var identity struct {
+			OrderID string `json:"orderId"`
 		}
-	})
-	defer unsub()
-
-	// Poll on each fill event plus a periodic safety net.
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+		if json.Unmarshal([]byte(*settled.Operation.Outcome), &identity) == nil && identity.OrderID != "" {
+			orderID = identity.OrderID
+		}
+	}
+	knownOrderID := orderID != ""
+	var resolvedIdentity atomic.Value
+	resolvedIdentity.Store(orderID)
+	if !knownOrderID {
+		orderID = settled.Operation.ID
+	}
+	// A terminal push already captured before readiness must not wait behind
+	// an ACK or history read. Snapshot recovery races the authoritative stream.
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+	type snapshotResult struct {
+		value SimOrderWithFills
+		err   error
+	}
+	snapshot := make(chan snapshotResult, 1)
+	go func() {
+		lookupID := orderID
+		// Resolve a missing venue identity concurrently. An already-correlated
+		// execution update can still win while placement settlement is pending.
+		if !knownOrderID {
+			placed, err := h.Wait(readCtx)
+			if err != nil {
+				snapshot <- snapshotResult{err: err}
+				return
+			}
+			if evidence, valid := operationExecution(placed.Operation, h.objectID); valid {
+				snapshot <- snapshotResult{value: evidence}
+				return
+			}
+			lookupID, err = h.resolveOrderID(readCtx)
+			if err != nil {
+				snapshot <- snapshotResult{err: err}
+				return
+			}
+			if lookupID != settled.Operation.ID {
+				resolvedIdentity.Store(lookupID)
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+		}
+		// One acknowledged bootstrap read. Later reads require a real stream
+		// gap/re-authentication or a failed read, capped at three per invocation.
+		// A healthy pending snapshot never schedules another GET by time alone.
+		var retry <-chan time.Time
+		for attempt := 0; attempt < 3; attempt++ {
+			ready := h.deps.awaitExecutionReady
+			if attempt > 0 {
+				select {
+				case <-readCtx.Done():
+					return
+				case <-recovery:
+				case <-retry:
+				}
+				ready = h.deps.recoverExecutionReady
+			}
+			var result snapshotResult
+			if ready != nil {
+				result.err = ready(readCtx)
+			}
+			if attempt == 0 {
+				select {
+				case <-recovery:
+				default:
+				}
+			}
+			if result.err == nil && h.deps.getOrder != nil {
+				result.value, result.err = h.deps.getOrder(readCtx, h.objectID, lookupID)
+				if result.err == nil && result.value.Order.ID != "" && resolvedIdentity.Load().(string) == "" {
+					resolvedIdentity.Store(result.value.Order.ID)
+					select {
+					case wake <- struct{}{}:
+					default:
+					}
+				}
+			}
+			select {
+			case snapshot <- result:
+			case <-readCtx.Done():
+				return
+			}
+			retry = nil
+			if result.err != nil {
+				retry = time.After(time.Duration(attempt+1) * 250 * time.Millisecond)
+			}
+		}
+	}()
 	for {
-		if res, ok := check(); ok {
-			return res, nil
+		mu.Lock()
+		batch := events
+		events = nil
+		mu.Unlock()
+		for _, ev := range batch {
+			resolvedOrderID := resolvedIdentity.Load().(string)
+			if ev.Operation != nil && ev.Operation.ID == settled.Operation.ID {
+				if ev.Operation.State == OpFailed || ev.Operation.State == OpExpired {
+					return zero, newOperationFailedError(ev.Operation.snapshot())
+				}
+				if result, known := operationExecution(*ev.Operation, h.objectID); known && (resolvedOrderID == "" || result.Order.ID == resolvedOrderID) {
+					return result, nil
+				}
+			}
+			if ev.Order != nil && ev.EntityID == h.objectID && resolvedOrderID == "" {
+				// Preserve early account-scoped evidence until settlement supplies
+				// this order's venue identity; never match an arbitrary account order.
+				mu.Lock()
+				if len(events) < 256 {
+					events = append(events, ev)
+				}
+				mu.Unlock()
+				continue
+			}
+			if ev.Order != nil && ev.EntityID == h.objectID && ev.Order.Order.ID == resolvedOrderID && isTerminalOrderStatus(ev.Order.Order.Status) {
+				if evidence, valid := executionUpdate(settled.Operation, h.objectID, ev.Order.Order); valid {
+					return evidence, nil
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return zero, ctx.Err()
-		case <-fillCh:
-		case <-ticker.C:
+		case <-wake:
+		case result := <-snapshot:
+			var failure *OperationFailedError
+			if errors.As(result.err, &failure) && failure.Operation.ID == settled.Operation.ID &&
+				(failure.Operation.State == string(OpFailed) || failure.Operation.State == string(OpExpired)) {
+				if h.deps.releaseExecution != nil {
+					h.deps.releaseExecution()
+				}
+				return zero, failure
+			}
+			resolvedOrderID := resolvedIdentity.Load().(string)
+			if result.err == nil && (resolvedOrderID == "" || result.value.Order.ID == resolvedOrderID) && isTerminalOrderStatus(result.value.Order.Status) {
+				if evidence, valid := executionUpdate(settled.Operation, h.objectID, result.value.Order); valid {
+					return evidence, nil
+				}
+			}
+			// A missing/stale historical receipt is not proof of failure. The stream
+			// can still establish execution; the caller deadline bounds uncertainty.
 		}
 	}
+
 }
 
 // OnFill registers a callback for each fill on this order. It returns an
 // unsubscribe function.
 func (h *OrderHandle) OnFill(ctx context.Context, callback func(SimFill)) func() {
-	var orderID, cloid string
-	var once sync.Once
-	active := true
+	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
+	var queued []SimFill
+	wake := make(chan struct{}, 1)
+	// The dispatcher must never wait for submission: an optimistic fill can
+	// arrive synchronously inside the very HTTP call whose completion we await.
 	unsub := h.deps.onFillEvent(func(ev RealmEvent) {
-		if ev.Fill == nil {
+		if ev.Fill == nil || ev.Fill.IsOptimistic || ctx.Err() != nil {
 			return
 		}
-		once.Do(func() {
-			id, err := h.resolveOrderID(ctx)
-			cl := h.resolveCloid(ctx)
-			mu.Lock()
-			if err == nil {
-				orderID = id
-			}
-			cloid = cl
-			mu.Unlock()
-		})
 		mu.Lock()
-		oid := orderID
-		cl := cloid
-		a := active
+		queued = append(queued, *ev.Fill)
 		mu.Unlock()
-		if a && fillMatches(ev.Fill, oid, cl) {
-			callback(*ev.Fill)
+		select {
+		case wake <- struct{}{}:
+		default:
 		}
 	})
-	return func() {
-		mu.Lock()
-		active = false
-		mu.Unlock()
-		unsub()
-	}
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { cancel(); unsub() }) }
+	go func() {
+		defer stop()
+		id, err := h.resolveOrderID(ctx)
+		if err != nil {
+			return
+		}
+		cloid := h.resolveCloid(ctx)
+		seen := map[string]bool{}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-wake:
+			}
+			mu.Lock()
+			batch := queued
+			queued = nil
+			mu.Unlock()
+			for _, fill := range batch {
+				if ctx.Err() != nil {
+					return
+				}
+				if fillMatches(&fill, id, cloid) {
+					key := fill.FillID
+					if key == "" {
+						key = fill.ID
+					}
+					if key == "" || seen[key] {
+						continue
+					}
+					seen[key] = true
+					callback(fill)
+				}
+			}
+		}
+	}()
+	return stop
 }
 
 // FillSummary returns the platform-side Fill record (P&L, fee breakdown,
@@ -420,13 +618,34 @@ func AsOperationFailed(err error) (*OperationFailedError, bool) {
 
 // executionDisposition describes what is known without treating acceptance or
 // a working partial fill as terminal. Amounts are decimal strings, never float64.
+var executionDecimal = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+
 func executionDisposition(order SimOrder) (string, string) {
+	if !executionDecimal.MatchString(order.FilledSize) {
+		return "unknown", "unknown"
+	}
 	filled, ok := new(big.Rat).SetString(order.FilledSize)
 	if !ok || filled.Sign() < 0 {
 		return "unknown", "unknown"
 	}
-	switch order.Status {
+	switch normalizeExecutionStatus(order.Status) {
 	case OrderFilled:
+		if executionDecimal.MatchString(order.Size) {
+			requested, _ := new(big.Rat).SetString(order.Size)
+			if requested.Sign() > 0 && filled.Cmp(requested) < 0 {
+				remainder := "unknown"
+				if order.TimeInForce == "IOC" {
+					remainder = "cancelled"
+				}
+				if filled.Sign() > 0 {
+					return "partial", remainder
+				}
+				if remainder == "cancelled" {
+					return "no_fill", remainder
+				}
+				return "unknown", "unknown"
+			}
+		}
 		if filled.Sign() > 0 {
 			return "filled", "filled"
 		}
@@ -453,6 +672,31 @@ func (filled SimOrderWithFills) ExecutionOutcome() map[string]any {
 	out["orderId"] = filled.Order.ID
 	out["status"] = string(filled.Order.Status)
 	out["filledSize"] = filled.Order.FilledSize
+	out["fulfillmentState"] = "unknown"
+	out["averagePriceFinal"] = false
+	out["averagePriceSource"] = "venue_aggregate"
+	if executionDecimal.MatchString(filled.Order.Size) && executionDecimal.MatchString(filled.Order.FilledSize) {
+		requested, _ := new(big.Rat).SetString(filled.Order.Size)
+		executed, _ := new(big.Rat).SetString(filled.Order.FilledSize)
+		if requested.Cmp(executed) >= 0 {
+			out["requestedSize"] = filled.Order.Size
+			if executed.Sign() == 0 {
+				out["fulfillmentState"] = "none"
+			} else if requested.Cmp(executed) > 0 {
+				out["fulfillmentState"] = "partial"
+			} else {
+				out["fulfillmentState"] = "full"
+			}
+			scale := 0
+			for _, v := range []string{filled.Order.Size, filled.Order.FilledSize} {
+				if dot := strings.IndexByte(v, '.'); dot >= 0 && len(v)-dot-1 > scale {
+					scale = len(v) - dot - 1
+				}
+			}
+			out["remainingSize"] = new(big.Rat).Sub(requested, executed).FloatString(scale)
+		}
+	}
+
 	out["executionState"], out["remainingDisposition"] = executionDisposition(filled.Order)
 	if out["executionState"] == "unknown" {
 		out["status"] = "UNKNOWN"

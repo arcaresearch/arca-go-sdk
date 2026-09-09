@@ -200,12 +200,34 @@ func (a *Arca) GetLeverage(ctx context.Context, objectID, coin string) (Leverage
 
 func (a *Arca) orderHandleDeps() orderHandleDeps {
 	return orderHandleDeps{
+		onExecutionGap: func(handler func()) func() {
+			gap := a.ws.OnGap(func(int64) { handler() })
+			auth := a.ws.OnAuthenticated(handler)
+			return func() { gap(); auth() }
+		},
+		recoverExecutionReady: func(ctx context.Context) error {
+			_, err := a.ws.watchPath(ctx, "/")
+			a.ws.unwatchPath("/")
+			return err
+		},
+		onExecutionEvent: func(handler func(RealmEvent)) func() {
+			a.ws.EnsureConnected()
+			ctx, cancel := context.WithCancel(context.Background())
+			operation := a.ws.On(EventOperationUpdated, handler)
+			order := a.ws.On(EventOrderUpdated, handler)
+			go func() { _, _ = a.ws.watchPath(ctx, "/") }()
+			return func() { operation(); order(); cancel(); a.ws.unwatchPath("/") }
+		},
 		getOrder: func(ctx context.Context, objectID, orderID string) (SimOrderWithFills, error) {
 			return a.GetOrder(ctx, objectID, orderID)
 		},
 		onFillEvent: func(handler func(RealmEvent)) func() {
-			a.ws.EnsureConnected()
-			return a.ws.On(EventFillPreviewed, handler)
+			ctx, cancel := context.WithCancel(context.Background())
+			preview := a.ws.On(EventFillPreviewed, handler)
+			recorded := a.ws.On(EventFillRecorded, handler)
+			ready := make(chan struct{})
+			go func() { defer close(ready); _, _ = a.ws.watchPath(ctx, "/") }()
+			return func() { cancel(); preview(); recorded(); go func() { <-ready; a.ws.unwatchPath("/") }() }
 		},
 		cancelOrder: func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse] {
 			return a.CancelOrder(ctx, opts)
@@ -270,9 +292,22 @@ func (a *Arca) emitOptimisticFill(operation Operation, coin string, side OrderSi
 // idempotency key. Returns an OrderHandle: Wait blocks until placement, then
 // use Filled/OnFill/FillSummary/Cancel for the fill lifecycle.
 func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHandle {
+	stream := a.newOrderStream(ctx, opts.ObjectID)
+	deps := a.orderHandleDeps()
+	deps.releaseExecution = stream.stop
+	deps.onExecutionEvent = stream.subscribe
+	liveFills := deps.onFillEvent
+	deps.onFillEvent = func(handler func(RealmEvent)) func() {
+		live := liveFills(handler)
+		replay := stream.subscribe(handler)
+		return func() { live(); replay() }
+	}
+	deps.awaitExecutionReady = stream.awaitReady
+
 	call := func() (OrderOperationResponse, error) {
 		var resp OrderOperationResponse
 		if err := a.ensureReady(ctx); err != nil {
+			stream.stop()
 			return resp, err
 		}
 		body := map[string]any{
@@ -331,8 +366,10 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 			body["isolated"] = true
 		}
 		if err := a.client.post(ctx, "/objects/"+opts.ObjectID+"/exchange/orders", body, &resp); err != nil {
+			stream.stop()
 			return resp, err
 		}
+		stream.submitted(resp.Operation)
 		if resp.Operation.State == OpFailed || resp.Operation.State == OpExpired {
 			return resp, newOperationFailedError(resp.Operation.snapshot())
 		}
@@ -344,7 +381,7 @@ func (a *Arca) PlaceOrder(ctx context.Context, opts PlaceOrderOptions) *OrderHan
 			return a.waitForOperation(c, id, t)
 		},
 		nil, 0)
-	handle := newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	handle := newOrderHandle(base, opts.ObjectID, opts.Path, deps)
 	handle.immediate = !opts.IsTrigger && (opts.OrderType == "" || strings.EqualFold(opts.OrderType, "MARKET") || strings.EqualFold(opts.TimeInForce, "IOC") || strings.EqualFold(opts.TimeInForce, "FOK"))
 	return handle
 }
@@ -489,12 +526,13 @@ func (a *Arca) ClosePosition(ctx context.Context, opts ClosePositionOptions) *Or
 		a.emitOptimisticFill(resp.Operation, opts.Market, side, opts.Path, "")
 		return resp, nil
 	}
+	call, deps := a.captureOrderSubmission(ctx, opts.ObjectID, call)
 	base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
 		func(c context.Context, id string, t time.Duration) (*Operation, error) {
 			return a.waitForOperation(c, id, t)
 		},
 		nil, 0)
-	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	return newOrderHandle(base, opts.ObjectID, opts.Path, deps)
 }
 
 // SetStopLoss attaches a stop-loss to the open position for opts.Coin. By
@@ -608,12 +646,13 @@ func (a *Arca) setPositionTrigger(ctx context.Context, tpsl string, opts SetPosi
 		}
 		return resp, nil
 	}
+	call, deps := a.captureOrderSubmission(ctx, opts.ObjectID, call)
 	base := newOperationHandle(call, OrderOperationResponse.op, (*OrderOperationResponse).setOp,
 		func(c context.Context, id string, t time.Duration) (*Operation, error) {
 			return a.waitForOperation(c, id, t)
 		},
 		nil, 0)
-	return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+	return newOrderHandle(base, opts.ObjectID, opts.Path, deps)
 }
 
 // SetPositionTpsl attaches a stop-loss and/or take-profit to an open position

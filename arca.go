@@ -24,8 +24,10 @@ func isIDFormat(v string) bool { return uuidRe.MatchString(v) || typeidRe.MatchS
 // Call Ready before issuing requests (or rely on lazy resolution — every method
 // resolves the realm on first use).
 type Arca struct {
-	client *httpClient
-	ws     *WebSocketManager
+	orderStreamsMu sync.Mutex
+	orderStreams   map[*orderStream]struct{}
+	client         *httpClient
+	ws             *WebSocketManager
 
 	credType credentialType
 	apiKey   string
@@ -186,6 +188,16 @@ func (a *Arca) ClearHistoryCache() { a.cache.clear() }
 
 // Dispose stops background timers and disconnects the WebSocket.
 func (a *Arca) Dispose() {
+	a.orderStreamsMu.Lock()
+	streams := make([]*orderStream, 0, len(a.orderStreams))
+	for stream := range a.orderStreams {
+		streams = append(streams, stream)
+	}
+	a.orderStreamsMu.Unlock()
+	for _, stream := range streams {
+		stream.stop()
+	}
+
 	a.refreshMu.Lock()
 	if a.refreshTimer != nil {
 		a.refreshTimer.Stop()
@@ -342,12 +354,12 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 	if err := a.ensureReady(ctx); err != nil {
 		return nil, err
 	}
-	a.ws.EnsureConnected()
-	go func() { _, _ = a.ws.watchPath(ctx, "/") }()
-	defer a.ws.unwatchPath("/")
-
 	deadlineCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	watchDone := make(chan struct{})
+	a.ws.EnsureConnected()
+	go func() { defer close(watchDone); _, _ = a.ws.watchPath(deadlineCtx, "/") }()
+	defer func() { cancel(); go func() { <-watchDone; a.ws.unwatchPath("/") }() }()
 
 	resultCh := make(chan *Operation, 1)
 	errCh := make(chan error, 1)
@@ -373,7 +385,13 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 			}
 		}
 	}
+	var fetching atomic.Bool
 	fetchAndResolve := func() {
+		if settled.Load() || !fetching.CompareAndSwap(false, true) {
+			return
+		}
+		defer fetching.Store(false)
+
 		var detail OperationDetailResponse
 		if err := a.client.get(deadlineCtx, "/operations/"+operationID, nil, &detail); err == nil {
 			tryResolve(&detail.Operation)
@@ -391,11 +409,12 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 		}
 	})
 	defer unsub()
+	offGap := a.ws.OnGap(func(int64) { go fetchAndResolve() })
+	defer offGap()
+	offAuth := a.ws.OnAuthenticated(func() { go fetchAndResolve() })
+	defer offAuth()
 
 	go fetchAndResolve()
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
 
 	for {
 		select {
@@ -419,8 +438,6 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 			return o, nil
 		case err := <-errCh:
 			return nil, err
-		case <-ticker.C:
-			go fetchAndResolve()
 		}
 	}
 }

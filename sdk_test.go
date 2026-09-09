@@ -304,19 +304,17 @@ func TestRealmResolution_BySlug(t *testing.T) {
 	}
 }
 
-func TestOperationHandle_WaitSettlesViaPoll(t *testing.T) {
+func TestOperationHandle_WaitSettlesViaPush(t *testing.T) {
+	snapshot := make(chan struct{}, 1)
 	var opCalls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/transfer":
 			writeEnvelope(w, 200, TransferResponse{Operation: Operation{ID: "op_xfer", State: OpPending}})
 		case strings.HasPrefix(r.URL.Path, "/api/v1/operations/op_xfer"):
-			n := atomic.AddInt32(&opCalls, 1)
-			state := OpPending
-			if n >= 2 {
-				state = OpCompleted
-			}
-			writeEnvelope(w, 200, OperationDetailResponse{Operation: Operation{ID: "op_xfer", State: state}})
+			atomic.AddInt32(&opCalls, 1)
+			writeEnvelope(w, 200, OperationDetailResponse{Operation: Operation{ID: "op_xfer", State: OpPending}})
+			snapshot <- struct{}{}
 		default:
 			writeEnvelope(w, 200, map[string]any{})
 		}
@@ -338,6 +336,10 @@ func TestOperationHandle_WaitSettlesViaPoll(t *testing.T) {
 		t.Errorf("submitted state = %s", sub.Operation.State)
 	}
 
+	go func() {
+		<-snapshot
+		a.ws.EmitLocal(RealmEvent{Type: EventOperationUpdated, EntityID: "op_xfer", Operation: &Operation{ID: "op_xfer", State: OpCompleted}})
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	final, err := h.Wait(ctx)

@@ -33,9 +33,7 @@ func TestConfirmedUsesSettledOrderIdentityAndTerminalReceipt(t *testing.T) {
 						t.Fatalf("wrong identity %s/%s", account, id)
 					}
 					status := tc.status
-					if reads == 1 {
-						status = OrderOpen
-					}
+
 					return SimOrderWithFills{Order: SimOrder{ID: id, Status: status, FilledSize: tc.filled, AvgFillPrice: &price}}, nil
 				}, onFillEvent: func(func(RealmEvent)) func() { return func() {} },
 			})
@@ -43,7 +41,7 @@ func TestConfirmedUsesSettledOrderIdentityAndTerminalReceipt(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			out, err := h.Confirmed(ctx)
-			if err != nil || calls != 1 || reads < 2 || out.Operation.ParsedOutcome["status"] != string(tc.status) || out.Operation.ParsedOutcome["filledSize"] != tc.filled {
+			if err != nil || calls != 1 || reads != 1 || out.Operation.ParsedOutcome["status"] != string(tc.status) || out.Operation.ParsedOutcome["filledSize"] != tc.filled {
 				t.Fatalf("%+v err=%v calls=%d reads=%d", out, err, calls, reads)
 			}
 		})

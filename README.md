@@ -249,3 +249,24 @@ support; consumers must not infer features from market prefixes or venue names.
 
 The normative ownership and evolution policy lives in the Arca monorepo at
 `documents/contracts/builder-sdk-golden-contract.md`.
+
+
+### Terminal execution receipts
+
+`OrderHandle.ExecutionReceipt(ctx)` returns terminal execution evidence immediately
+when the HTTP operation already contains it; it does not wait for a WebSocket ACK,
+order-history reads, or individual ledger fills. Nonterminal responses use scoped
+execution updates and an acknowledged snapshot. `Confirmed` keeps its existing
+response type and uses this receipt path for immediate orders.
+
+The receipt includes original `RequestedSize`, executed `FilledSize`, known
+`RemainingSize`, `FulfillmentState`, and `RemainingDisposition`. Unknown original
+intent stays unknown. A terminal IOC may be only partially fulfilled. Venue
+aggregate prices have `AveragePriceFinal=false`; do not present them as exact
+final VWAP. `FillsComplete=false` is independent of terminal execution.
+
+`GetOperationExecutionReceipt(ctx, objectID, operation)` recovers from the original
+operation before requesting account-scoped history. It rejects a different account
+and never submits a replacement. `Filled` retains its full-order return type and
+performs a metadata read after execution; unavailable or stale details remain an
+error. Use `ExecutionReceipt` for prompt confirmation.

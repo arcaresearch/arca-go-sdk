@@ -4,6 +4,7 @@ package arca
 type EventType = string
 
 const (
+	EventOrderUpdated     EventType = "order.updated"
 	EventOperationCreated EventType = "operation.created"
 	EventOperationUpdated EventType = "operation.updated"
 	EventEventCreated     EventType = "event.created"
@@ -103,9 +104,10 @@ type RealmEvent struct {
 	Path    string `json:"path,omitempty"`
 	WatchID string `json:"watchId,omitempty"`
 
-	Fill    *SimFill        `json:"fill,omitempty"`
-	Funding *FundingPayment `json:"funding,omitempty"`
-	Realm   *Realm          `json:"realm,omitempty"`
+	Order   *SimOrderWithFills `json:"order,omitempty"`
+	Fill    *SimFill           `json:"fill,omitempty"`
+	Funding *FundingPayment    `json:"funding,omitempty"`
+	Realm   *Realm             `json:"realm,omitempty"`
 
 	Market   string         `json:"market,omitempty"`
 	Interval CandleInterval `json:"interval,omitempty"`
