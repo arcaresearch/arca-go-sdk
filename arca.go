@@ -406,6 +406,14 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 	defer offGap()
 	offAuth := a.ws.OnAuthenticated(recover)
 	defer offAuth()
+	offRotated := a.ws.OnRotated(recover)
+	defer offRotated()
+	offSnapshots := a.ws.onOperationSnapshot(func(operations []Operation) {
+		for _, operation := range operations {
+			tryResolve(&operation)
+		}
+	})
+	defer offSnapshots()
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
 	recover()
@@ -431,13 +439,24 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 			for attempt := 0; attempt < 3; attempt++ {
 				ackCtx, ackCancel := context.WithTimeout(deadlineCtx, time.Second)
 				var ackErr error
+				var snapshot *WatchSnapshot
 				if !acquired {
 					acquired = true
-					_, ackErr = a.ws.watchPath(ackCtx, "/")
+					snapshot, ackErr = a.ws.watchPath(ackCtx, "/")
 				} else {
-					_, ackErr = a.ws.recoverPathReady(ackCtx, "/")
+					snapshot, ackErr = a.ws.recoverPathReady(ackCtx, "/")
 				}
 				ackCancel()
+				if ackErr == nil && snapshot != nil {
+					for _, operations := range [][]Operation{snapshot.Operations, snapshot.BufferedOperations} {
+						for _, operation := range operations {
+							tryResolve(&operation)
+							if settled.Load() {
+								return
+							}
+						}
+					}
+				}
 				if deadlineCtx.Err() != nil || settled.Load() {
 					return
 				}

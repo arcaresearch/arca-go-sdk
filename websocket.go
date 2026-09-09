@@ -82,8 +82,11 @@ type handoff struct {
 	attempts int
 }
 
-type pendingRequest struct {
-	ch chan json.RawMessage
+type pendingRequest struct{ ch chan json.RawMessage }
+
+type pathSnapshotRequest struct {
+	requestID string
+	conn      *websocket.Conn
 }
 
 // WebSocketManager manages the realtime connection. It is created and owned by
@@ -99,21 +102,23 @@ type WebSocketManager struct {
 	connecting    bool
 	gen           int
 
-	listeners      map[string]map[int]func(RealmEvent)
-	statusList     map[int]func(ConnectionStatus)
-	gapList        map[int]func(int64)
-	authList       map[int]func()
-	rotatedList    map[int]func()
-	errorList      map[int]func(error)
-	nextListenerID int
+	listeners             map[string]map[int]func(RealmEvent)
+	statusList            map[int]func(ConnectionStatus)
+	gapList               map[int]func(int64)
+	authList              map[int]func()
+	rotatedList           map[int]func()
+	operationSnapshotList map[int]func([]Operation)
+	errorList             map[int]func(error)
+	nextListenerID        int
 
-	pathRefs   map[string]int
-	midsAll    int
-	midsCoins  map[string]int
-	midsExch   string
-	candleRefs map[string]map[CandleInterval]bool
-	oiRefs     map[string]map[CandleInterval]bool
-	tradeRefs  map[string]int
+	latestPathSnapshotRequests map[string]pathSnapshotRequest
+	pathRefs                   map[string]int
+	midsAll                    int
+	midsCoins                  map[string]int
+	midsExch                   string
+	candleRefs                 map[string]map[CandleInterval]bool
+	oiRefs                     map[string]map[CandleInterval]bool
+	tradeRefs                  map[string]int
 
 	chartWatches map[string]chartWatchReq
 
@@ -153,22 +158,24 @@ type chartWatchReq struct {
 
 func newWebSocketManager(cfg wsConfig) *WebSocketManager {
 	return &WebSocketManager{
-		cfg:          cfg,
-		status:       StatusDisconnected,
-		listeners:    map[string]map[int]func(RealmEvent){},
-		statusList:   map[int]func(ConnectionStatus){},
-		gapList:      map[int]func(int64){},
-		authList:     map[int]func(){},
-		rotatedList:  map[int]func(){},
-		errorList:    map[int]func(error){},
-		pathRefs:     map[string]int{},
-		midsCoins:    map[string]int{},
-		midsExch:     "sim",
-		candleRefs:   map[string]map[CandleInterval]bool{},
-		oiRefs:       map[string]map[CandleInterval]bool{},
-		tradeRefs:    map[string]int{},
-		chartWatches: map[string]chartWatchReq{},
-		pending:      map[string]pendingRequest{},
+		cfg:                        cfg,
+		status:                     StatusDisconnected,
+		listeners:                  map[string]map[int]func(RealmEvent){},
+		statusList:                 map[int]func(ConnectionStatus){},
+		gapList:                    map[int]func(int64){},
+		authList:                   map[int]func(){},
+		rotatedList:                map[int]func(){},
+		operationSnapshotList:      map[int]func([]Operation){},
+		errorList:                  map[int]func(error){},
+		pathRefs:                   map[string]int{},
+		latestPathSnapshotRequests: map[string]pathSnapshotRequest{},
+		midsCoins:                  map[string]int{},
+		midsExch:                   "sim",
+		candleRefs:                 map[string]map[CandleInterval]bool{},
+		oiRefs:                     map[string]map[CandleInterval]bool{},
+		tradeRefs:                  map[string]int{},
+		chartWatches:               map[string]chartWatchReq{},
+		pending:                    map[string]pendingRequest{},
 	}
 }
 
@@ -422,6 +429,17 @@ func (m *WebSocketManager) writeJSON(conn *websocket.Conn, msg any) error {
 	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
+	// Correlation belongs to the live path subscription, not the caller waiting
+	// for its reply. Record it in actual wire-send order and bind it to the socket.
+	if watch, ok := msg.(map[string]any); ok && watch["action"] == "watch" {
+		path, _ := watch["path"].(string)
+		requestID, _ := watch["requestId"].(string)
+		m.mu.Lock()
+		if conn == m.conn && m.status == StatusConnected && m.pathRefs[path] > 0 && requestID != "" {
+			m.latestPathSnapshotRequests[path] = pathSnapshotRequest{requestID: requestID, conn: conn}
+		}
+		m.mu.Unlock()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return conn.Write(ctx, websocket.MessageText, raw)
@@ -482,6 +500,19 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 	case "aggregation_watch_created", "chart_snapshot_watch_created", "watch_snapshot":
 		if head.RequestID != "" {
 			m.resolvePending(head.RequestID, data)
+		}
+		if head.Type == "watch_snapshot" {
+			var snapshot WatchSnapshot
+			if json.Unmarshal(data, &snapshot) == nil {
+				m.mu.Lock()
+				current, exists := m.latestPathSnapshotRequests[snapshot.Path]
+				valid := exists && m.pathRefs[snapshot.Path] > 0 && current.requestID == head.RequestID && current.conn == m.conn && m.status == StatusConnected
+				m.mu.Unlock()
+				if valid {
+					m.emitOperationSnapshot(snapshot.Operations)
+					m.emitOperationSnapshot(snapshot.BufferedOperations)
+				}
+			}
 		}
 		if head.Type == "watch_snapshot" {
 			var ev RealmEvent
@@ -559,6 +590,7 @@ func (m *WebSocketManager) onAuthenticated(data []byte) {
 	m.readServerLifetime(data)
 
 	m.mu.Lock()
+	clear(m.latestPathSnapshotRequests)
 	m.lastDeliverySeq = 0
 	m.setStatusLocked(StatusConnected)
 	conn := m.conn
@@ -739,6 +771,29 @@ func (m *WebSocketManager) OnRotated(handler func()) func() {
 		m.mu.Lock()
 		delete(m.rotatedList, id)
 		m.mu.Unlock()
+	}
+}
+
+// Correlated snapshot evidence is shared by every live operation waiter.
+// A second owner can replace a root watch while the first operation settles.
+func (m *WebSocketManager) onOperationSnapshot(handler func([]Operation)) func() {
+	m.mu.Lock()
+	id := m.nextListenerID
+	m.nextListenerID++
+	m.operationSnapshotList[id] = handler
+	m.mu.Unlock()
+	return func() { m.mu.Lock(); delete(m.operationSnapshotList, id); m.mu.Unlock() }
+}
+
+func (m *WebSocketManager) emitOperationSnapshot(operations []Operation) {
+	m.mu.Lock()
+	handlers := make([]func([]Operation), 0, len(m.operationSnapshotList))
+	for _, handler := range m.operationSnapshotList {
+		handlers = append(handlers, handler)
+	}
+	m.mu.Unlock()
+	for _, handler := range handlers {
+		handler(operations)
 	}
 }
 
@@ -1333,6 +1388,7 @@ func (m *WebSocketManager) unwatchPath(path string) {
 	cur := m.pathRefs[path]
 	if cur <= 1 {
 		delete(m.pathRefs, path)
+		delete(m.latestPathSnapshotRequests, path)
 		m.mu.Unlock()
 		m.send(map[string]any{"action": "unwatch", "path": path})
 		return

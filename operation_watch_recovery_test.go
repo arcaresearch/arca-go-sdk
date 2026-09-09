@@ -3,6 +3,7 @@ package arca
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +35,7 @@ func newOperationRecoveryServer(t *testing.T) (*operationRecoveryServer, *Arca) 
 		go tc.readLoop()
 		<-tc.gone
 	})
-	mux.HandleFunc("/api/v1/operations/op", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/operations/", func(w http.ResponseWriter, r *http.Request) {
 		s.reads.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		if s.failures.Add(-1) >= 0 {
@@ -46,7 +47,7 @@ func newOperationRecoveryServer(t *testing.T) (*operationRecoveryServer, *Arca) 
 		if s.completed.Load() {
 			state = OpCompleted
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": OperationDetailResponse{Operation: Operation{ID: "op", State: state}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": OperationDetailResponse{Operation: Operation{ID: strings.TrimPrefix(r.URL.Path, "/api/v1/operations/"), State: state}}})
 	})
 	s.srv = httptest.NewServer(mux)
 	t.Cleanup(s.srv.Close)
@@ -93,6 +94,223 @@ func beginOperationWait(t *testing.T, a *Arca) <-chan error {
 		done <- err
 	}()
 	return done
+}
+
+func TestOperationWatchTerminalSnapshotPrecedesHTTP(t *testing.T) {
+	for _, state := range []OperationState{OpCompleted, OpFailed, OpExpired} {
+		for _, buffered := range []bool{false, true} {
+			name := string(state)
+			if buffered {
+				name += "/buffered"
+			}
+			t.Run(name, func(t *testing.T) {
+				s, a := newOperationRecoveryServer(t)
+				s.failures.Store(9)
+				done := make(chan error, 1)
+				go func() {
+					op, err := a.WaitForOperation(context.Background(), "op", 3*time.Second)
+					if err == nil && (op.ID != "op" || op.State != state) {
+						t.Errorf("wrong operation: %+v", op)
+					}
+					done <- err
+				}()
+				c := s.accept()
+				c.handshake(0)
+				request := operationWatchRequest(c)
+				base := []Operation{{ID: "foreign", State: OpCompleted}, {ID: "op", State: state}}
+				var tail []Operation
+				if buffered {
+					base[1].State = OpPending
+					tail = []Operation{{ID: "op", State: state}}
+				}
+				c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": request["requestId"], "operations": base, "bufferedOperations": tail})
+				err := <-done
+				if state == OpCompleted {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					var failed *OperationFailedError
+					if !errors.As(err, &failed) || failed.Operation.State != string(state) {
+						t.Fatalf("expected typed %s, got %v", state, err)
+					}
+				}
+				if s.reads.Load() != 0 {
+					t.Fatalf("terminal snapshot performed %d HTTP reads", s.reads.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestOperationWatchStaleSnapshotAndForeignTerminalCannotComplete(t *testing.T) {
+	s, a := newOperationRecoveryServer(t)
+	done := beginOperationWait(t, a)
+	c := s.accept()
+	c.handshake(0)
+	request := operationWatchRequest(c)
+	c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": "stale-request", "operations": []Operation{{ID: "op", State: OpCompleted}}})
+	time.Sleep(50 * time.Millisecond)
+	if s.reads.Load() != 0 {
+		t.Fatal("stale snapshot acknowledged recovery")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("stale snapshot completed wait: %v", err)
+	default:
+	}
+	c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": request["requestId"], "operations": []Operation{{ID: "op", State: OpPending}}, "bufferedOperations": []Operation{{ID: "foreign", State: OpFailed}}})
+	waitOperationReads(t, s, 1)
+	select {
+	case err := <-done:
+		t.Fatalf("foreign operation completed wait: %v", err)
+	default:
+	}
+	c.send(map[string]any{"type": EventOperationUpdated, "entityId": "op", "operation": Operation{ID: "op", State: OpCompleted}})
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if s.reads.Load() != 1 {
+		t.Fatal("unexpected extra recovery read")
+	}
+}
+
+func TestOperationWatchRotationRecoversBufferedTerminalAfterHealthyPending(t *testing.T) {
+	for _, state := range []OperationState{OpCompleted, OpFailed, OpExpired} {
+		t.Run(string(state), func(t *testing.T) {
+			s, a := newOperationRecoveryServer(t)
+			done := beginOperationWait(t, a)
+			first := s.accept()
+			first.handshake(0)
+			operationWatchAck(first, operationWatchRequest(first))
+			waitOperationReads(t, s, 1)
+			if !a.ws.RotateConnection() {
+				t.Fatal("rotation refused")
+			}
+			replacement := s.accept()
+			replacement.warmup(0)
+			replacement.promote()
+			fresh := operationWatchRequest(replacement)
+			replacement.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": fresh["requestId"], "operations": []Operation{{ID: "op", State: OpPending}}, "bufferedOperations": []Operation{{ID: "op", State: state}}})
+			err := <-done
+			if state == OpCompleted {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var failed *OperationFailedError
+				if !errors.As(err, &failed) || failed.Operation.State != string(state) {
+					t.Fatalf("expected typed %s, got %v", state, err)
+				}
+			}
+			if s.reads.Load() != 1 {
+				t.Fatal("terminal replacement snapshot performed extra HTTP reads")
+			}
+		})
+	}
+}
+
+func TestOperationWatchSharedSnapshotCompletesOtherWaiter(t *testing.T) {
+	for _, state := range []OperationState{OpCompleted, OpFailed, OpExpired} {
+		t.Run(string(state), func(t *testing.T) {
+			s, a := newOperationRecoveryServer(t)
+			firstDone := beginOperationWait(t, a)
+			c := s.accept()
+			c.handshake(0)
+			operationWatchAck(c, operationWatchRequest(c))
+			waitOperationReads(t, s, 1)
+			secondDone := make(chan error, 1)
+			go func() {
+				op, err := a.WaitForOperation(context.Background(), "op-b", 3*time.Second)
+				if err == nil && op.ID != "op-b" {
+					t.Errorf("wrong second operation: %+v", op)
+				}
+				secondDone <- err
+			}()
+			next := operationWatchRequest(c)
+			c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": "stale-request", "bufferedOperations": []Operation{{ID: "op", State: state}}})
+			time.Sleep(30 * time.Millisecond)
+			select {
+			case err := <-firstDone:
+				t.Fatalf("stale snapshot completed first waiter: %v", err)
+			default:
+			}
+			c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": next["requestId"], "operations": []Operation{{ID: "op-b", State: OpPending}}, "bufferedOperations": []Operation{{ID: "op", State: state}}})
+			err := <-firstDone
+			if state == OpCompleted {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var failed *OperationFailedError
+				if !errors.As(err, &failed) || failed.Operation.State != string(state) {
+					t.Fatalf("expected typed %s, got %v", state, err)
+				}
+			}
+			waitOperationReads(t, s, 2)
+			select {
+			case err := <-secondDone:
+				t.Fatalf("first operation completed second waiter: %v", err)
+			default:
+			}
+			c.send(map[string]any{"type": EventOperationUpdated, "entityId": "op-b", "operation": Operation{ID: "op-b", State: OpCompleted}})
+			if err := <-secondDone; err != nil {
+				t.Fatal(err)
+			}
+			if s.reads.Load() != 2 {
+				t.Fatal("shared terminal evidence caused extra GET")
+			}
+		})
+	}
+}
+
+func TestOperationWatchSnapshotOutlivesInitiatingWaiter(t *testing.T) {
+	for _, state := range []OperationState{OpCompleted, OpFailed, OpExpired} {
+		t.Run(string(state), func(t *testing.T) {
+			s, a := newOperationRecoveryServer(t)
+			firstDone := beginOperationWait(t, a)
+			c := s.accept()
+			c.handshake(0)
+			operationWatchAck(c, operationWatchRequest(c))
+			waitOperationReads(t, s, 1)
+			secondDone := make(chan error, 1)
+			go func() {
+				_, err := a.WaitForOperation(context.Background(), "op-b", 100*time.Millisecond)
+				secondDone <- err
+			}()
+			request := operationWatchRequest(c)
+			if err := <-secondDone; err == nil {
+				t.Fatal("second waiter did not time out")
+			}
+			a.ws.mu.Lock()
+			owners := a.ws.pathRefs["/"]
+			a.ws.mu.Unlock()
+			if owners != 1 {
+				t.Fatalf("root owners after second timeout=%d", owners)
+			}
+			c.send(map[string]any{"type": "watch_snapshot", "path": "/", "requestId": request["requestId"], "operations": []Operation{{ID: "op-b", State: OpPending}}, "bufferedOperations": []Operation{{ID: "op", State: state}}})
+			err := <-firstDone
+			if state == OpCompleted {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var failed *OperationFailedError
+				if !errors.As(err, &failed) || failed.Operation.State != string(state) {
+					t.Fatalf("expected typed %s, got %v", state, err)
+				}
+			}
+			if s.reads.Load() != 1 {
+				t.Fatal("late shared snapshot performed extra HTTP read")
+			}
+			a.ws.mu.Lock()
+			owners = a.ws.pathRefs["/"]
+			a.ws.mu.Unlock()
+			if owners != 0 {
+				t.Fatalf("root lease leaked: %d", owners)
+			}
+		})
+	}
 }
 
 func TestOperationWatchFreshAckQuietPendingAndGap(t *testing.T) {
