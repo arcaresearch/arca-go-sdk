@@ -134,8 +134,6 @@ func (h *OperationHandle[T]) settle(ctx context.Context, timeout time.Duration) 
 // ---- OrderHandle ----
 
 type orderHandleDeps struct {
-	watchLifecycle        func(context.Context, OriginalOrderReference) (*OrderLifecycleWatch, error)
-	lifecycleLeg          int
 	releaseExecution      func()
 	awaitExecutionReady   func(context.Context) error
 	recoverExecutionReady func(context.Context) error
@@ -466,11 +464,6 @@ func (h *OrderHandle) waitExecutionEvidence(ctx context.Context) (SimOrderWithFi
 // OnFill registers a callback for each fill on this order. It returns an
 // unsubscribe function.
 func (h *OrderHandle) OnFill(ctx context.Context, callback func(SimFill)) func() {
-	if h.deps.watchLifecycle != nil {
-		child, cancel := context.WithCancel(ctx)
-		go func() { defer cancel(); _ = h.streamLifecycleFills(child, callback) }()
-		return cancel
-	}
 	ctx, cancel := context.WithCancel(ctx)
 	var mu sync.Mutex
 	var queued []SimFill

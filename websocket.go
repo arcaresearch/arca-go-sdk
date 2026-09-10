@@ -93,8 +93,7 @@ type pathSnapshotRequest struct {
 // Arca and exposed as Arca.WS. Subscriptions are reference-counted; the socket
 // connects lazily and reconnects forever with exponential backoff.
 type WebSocketManager struct {
-	lifecycleReaders map[string]lifecycleRegistration
-	cfg              wsConfig
+	cfg wsConfig
 
 	mu            sync.Mutex
 	conn          *websocket.Conn
@@ -235,8 +234,6 @@ func (m *WebSocketManager) Reconnect() {
 // Disconnect closes the connection and stops reconnecting.
 func (m *WebSocketManager) Disconnect() {
 	m.mu.Lock()
-	readers := m.lifecycleReaders
-	m.lifecycleReaders = nil
 	m.shouldConnect = false
 	m.connecting = false
 	m.gen++
@@ -246,9 +243,6 @@ func (m *WebSocketManager) Disconnect() {
 	warming := m.takeHandoffLocked()
 	m.setStatusLocked(StatusDisconnected)
 	m.mu.Unlock()
-	for _, reader := range readers {
-		reader.stop()
-	}
 	closeConn(warming, "client disconnect")
 	closeConn(conn, "client disconnect")
 }
@@ -469,9 +463,6 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 		DeliverySeq *int64 `json:"deliverySeq"`
 	}
 	if err := json.Unmarshal(data, &head); err != nil {
-		return
-	}
-	if m.deliverOrderLifecycle(data, head.Type, head.RequestID, head.DeliverySeq) {
 		return
 	}
 

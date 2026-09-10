@@ -270,7 +270,6 @@ operation before requesting account-scoped history. It rejects a different accou
 and never submits a replacement. `Filled` retains its full-order return type and
 performs a metadata read after execution; unavailable or stale details remain an
 error. Use `ExecutionReceipt` for prompt confirmation.
-
 ## Operation wait recovery
 
 `WaitForOperation` listens before acquiring its subscription. Startup and actual
