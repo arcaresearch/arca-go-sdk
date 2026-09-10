@@ -13,6 +13,7 @@ import (
 type OrderExecutionReceipt struct {
 	ObjectID             string  `json:"objectId"`
 	OperationID          string  `json:"operationId"`
+	Leg                  string  `json:"leg,omitempty"`
 	Market               string  `json:"market,omitempty"`
 	FulfillmentState     string  `json:"fulfillmentState"`
 	AveragePriceSource   string  `json:"averagePriceSource"`
@@ -31,6 +32,9 @@ type OrderExecutionReceipt struct {
 // ExecutionReceipt resolves from an authoritative terminal response or correlated
 // execution push. It never waits for every individual fill to be journaled.
 func (h *OrderHandle) ExecutionReceipt(ctx context.Context) (OrderExecutionReceipt, error) {
+	if h.deps.watchLifecycle != nil {
+		return h.waitLifecycleReceipt(ctx, false)
+	}
 	evidence, err := h.waitExecutionEvidence(ctx)
 	if err != nil {
 		return OrderExecutionReceipt{}, err
@@ -95,6 +99,23 @@ func (r OrderExecutionReceipt) Outcome() map[string]any {
 // confirmation API. This method materializes the full order once after terminal
 // proof; unavailable details remain an error, never fabricated metadata.
 func (h *OrderHandle) Filled(ctx context.Context) (SimOrderWithFills, error) {
+	if h.deps.watchLifecycle != nil {
+		receipt, err := h.waitLifecycleReceipt(ctx, true)
+		if err != nil {
+			return SimOrderWithFills{}, err
+		}
+		if receipt.OrderID == "" {
+			return SimOrderWithFills{}, newArcaError("ORDER_DETAILS_UNAVAILABLE", "The original execution has no venue order metadata", "")
+		}
+		detail, err := h.deps.getOrder(ctx, h.objectID, receipt.OrderID)
+		if err != nil {
+			return detail, err
+		}
+		if detail.Order.ID != receipt.OrderID || detail.FillsComplete == nil || !*detail.FillsComplete {
+			return SimOrderWithFills{}, newArcaError("ORDER_DETAILS_PENDING", "Complete original order accounting is unavailable", "")
+		}
+		return detail, nil
+	}
 	receipt, err := h.ExecutionReceipt(ctx)
 	if err != nil {
 		return SimOrderWithFills{}, err

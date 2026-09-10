@@ -200,6 +200,7 @@ func (a *Arca) GetLeverage(ctx context.Context, objectID, coin string) (Leverage
 
 func (a *Arca) orderHandleDeps() orderHandleDeps {
 	return orderHandleDeps{
+		watchLifecycle: a.WatchOrderLifecycle,
 		onExecutionGap: func(handler func()) func() {
 			gap := a.ws.OnGap(func(int64) { handler() })
 			auth := a.ws.OnAuthenticated(handler)
@@ -856,7 +857,7 @@ func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (Op
 	// buildLeg returns an OrderHandle whose operation outcome is rewritten to
 	// the leg's own order summary (which carries orderId), so resolveOrderID
 	// targets that leg even though all legs share the single bracket operation.
-	buildLeg := func(legOutcome map[string]any) *OrderHandle {
+	buildLeg := func(index int, legOutcome map[string]any) *OrderHandle {
 		legResp := resp
 		op := resp.Operation
 		if legOutcome != nil {
@@ -872,20 +873,26 @@ func (a *Arca) OpenWithBracket(ctx context.Context, opts OpenBracketOptions) (Op
 				return a.waitForOperation(c, id, t)
 			},
 			nil, 0)
-		return newOrderHandle(base, opts.ObjectID, opts.Path, a.orderHandleDeps())
+		deps := a.orderHandleDeps()
+		deps.lifecycleLeg = index
+		return newOrderHandle(base, opts.ObjectID, opts.Path, deps)
 	}
 
 	var entryOutcome map[string]any
 	if len(parsed.Orders) > 0 {
 		entryOutcome = parsed.Orders[0]
 	}
-	result.Entry = buildLeg(entryOutcome)
+	result.Entry = buildLeg(0, entryOutcome)
 	result.Entry.immediate = strings.EqualFold(opts.OrderType, "MARKET") || opts.OrderType == ""
 	if opts.TakeProfitPx != "" {
-		result.TakeProfit = buildLeg(legByTpsl("tp"))
+		result.TakeProfit = buildLeg(1, legByTpsl("tp"))
 	}
 	if opts.StopLossPx != "" {
-		result.StopLoss = buildLeg(legByTpsl("sl"))
+		index := 1
+		if opts.TakeProfitPx != "" {
+			index++
+		}
+		result.StopLoss = buildLeg(index, legByTpsl("sl"))
 	}
 	return result, nil
 }
