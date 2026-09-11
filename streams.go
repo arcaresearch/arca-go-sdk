@@ -2,6 +2,7 @@ package arca
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -521,13 +522,45 @@ func (a *Arca) WatchObjects(ctx context.Context, paths []string) (*ObjectsWatchS
 	return s, nil
 }
 
+// Backoff schedule for re-reading an invalidated exchange observation.
+//
+// An observation is invalidated by an exchangeStateUnavailable push or by its
+// own validUntil deadline passing with no newer push. The designed recovery is
+// the next coherent push, and the first retry is deliberately not immediate —
+// an unavailable projection re-read at once would hammer a mirror that just
+// said it cannot answer. But a push is not guaranteed: exchange.updated has no
+// durable log, and the server drops an enrichment that exceeds its budget
+// without assigning a deliverySeq, so neither the gap detector nor a resync
+// marker can see that loss. Without a bounded fallback read the stream would
+// sit on WatchReconnecting with no state for as long as the relay is quiet.
+// Doubles from 1s to a 30s ceiling (±20% jitter) and stops the moment any
+// structural state is applied.
+const (
+	exchangeRecoveryInitial = time.Second
+	exchangeRecoveryMax     = 30 * time.Second
+)
+
 // ExchangeWatchStream streams exchange-account state updates.
+//
+// Loss handling: a deliverySeq gap or server resync marker, a reconnect, and
+// an invalidated observation (exchangeStateUnavailable / expired validUntil)
+// each trigger a bounded REST re-read guarded by the observation epoch, so an
+// older read can never overwrite a newer push.
 type ExchangeWatchStream struct {
 	*WatchStream[ExchangeState]
 	objectID         string
+	fetch            func(context.Context) (ExchangeState, error)
 	observationEpoch uint64
 	observationMu    sync.Mutex
 	expiryTimer      *time.Timer
+	recoveryTimer    *time.Timer
+	recoveryAttempt  int
+	// Coalescing gate for REST re-reads: a request while one is in flight
+	// runs once more after it lands. The in-flight read belongs to an older
+	// epoch and would otherwise be the only read of that burst.
+	gateMu        sync.Mutex
+	refetchActive bool
+	refetchQueued bool
 }
 
 // WatchExchangeState streams exchange state (positions, orders, pending
@@ -538,7 +571,12 @@ func (a *Arca) WatchExchangeState(ctx context.Context, objectID string) (*Exchan
 		return nil, err
 	}
 	objectPath := detail.Object.Path
-	s := &ExchangeWatchStream{WatchStream: newWatchStream[ExchangeState](), objectID: objectID}
+	s := &ExchangeWatchStream{
+		WatchStream: newWatchStream[ExchangeState](),
+		objectID:    objectID,
+		fetch:       func(ctx context.Context) (ExchangeState, error) { return a.GetExchangeState(ctx, objectID) },
+	}
+	wasConnected := a.ws.Status() == StatusConnected
 	a.ws.EnsureConnected()
 	go func() { _, _ = a.ws.watchPath(context.Background(), objectPath) }()
 	unsub := a.ws.OnExchangeNotification(func(ev RealmEvent) {
@@ -557,11 +595,32 @@ func (a *Arca) WatchExchangeState(ctx context.Context, objectID string) (*Exchan
 			s.emitExchangeObservation(epoch, *ev.ExchangeState)
 			return
 		}
-		if st, e := a.GetExchangeState(context.Background(), objectID); e == nil {
+		if st, e := s.fetch(context.Background()); e == nil {
 			s.emitExchangeObservation(epoch, st)
 		}
 	})
 	s.addUnsub(unsub)
+	// A hole in the server-assigned deliverySeq, or a server resync marker,
+	// means at least one frame for this connection was lost, and there is no
+	// durable log to replay exchange.updated from.
+	s.addUnsub(a.ws.OnGap(func(int64) { s.Refresh() }))
+	// Everything pushed during an outage is gone, whether or not a state was
+	// held when it started. The first authentication of a connection that
+	// was not yet up at construction is the initial connect, not a reconnect,
+	// and the constructor's own read covers it.
+	var authMu sync.Mutex
+	skipFirstAuth := !wasConnected
+	s.addUnsub(a.ws.OnAuthenticated(func() {
+		authMu.Lock()
+		skip := skipFirstAuth
+		skipFirstAuth = false
+		authMu.Unlock()
+		if !skip {
+			s.Refresh()
+		}
+	}))
+	a.registerExchangeWatch(objectID, s)
+	s.addUnsub(func() { a.unregisterExchangeWatch(objectID, s) })
 	s.addUnsub(func() { a.ws.unwatchPath(objectPath) })
 	s.addUnsub(func() {
 		s.observationMu.Lock()
@@ -569,14 +628,57 @@ func (a *Arca) WatchExchangeState(ctx context.Context, objectID string) (*Exchan
 		if s.expiryTimer != nil {
 			s.expiryTimer.Stop()
 		}
+		s.clearRecoveryLocked()
 	})
 	s.observationMu.Lock()
 	epoch := s.observationEpoch
 	s.observationMu.Unlock()
-	if st, e := a.GetExchangeState(ctx, objectID); e == nil {
+	if st, e := s.fetch(ctx); e == nil {
 		s.emitExchangeObservation(epoch, st)
 	}
 	return s, nil
+}
+
+// Refresh re-reads the exchange state now, guarded by the observation epoch.
+//
+// For callers that learned out of band that the account changed — e.g.
+// OrderHandle.Accounted resolving through a REST read after the account push
+// for that commit was lost. Coalesces with any in-flight read; a push that
+// lands first wins and the read's result is discarded. Non-blocking.
+func (s *ExchangeWatchStream) Refresh() {
+	s.gateMu.Lock()
+	if s.refetchActive {
+		s.refetchQueued = true
+		s.gateMu.Unlock()
+		return
+	}
+	s.refetchActive = true
+	s.refetchQueued = false
+	s.gateMu.Unlock()
+	go func() {
+		for {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if !closed {
+				s.observationMu.Lock()
+				epoch := s.observationEpoch
+				s.observationMu.Unlock()
+				if st, err := s.fetch(context.Background()); err == nil {
+					s.emitExchangeObservation(epoch, st)
+				}
+			}
+			s.gateMu.Lock()
+			if s.refetchQueued && !closed {
+				s.refetchQueued = false
+				s.gateMu.Unlock()
+				continue
+			}
+			s.refetchActive = false
+			s.gateMu.Unlock()
+			return
+		}
+	}()
 }
 
 func (s *ExchangeWatchStream) emitExchangeObservation(epoch uint64, state ExchangeState) {
@@ -607,11 +709,13 @@ func (s *ExchangeWatchStream) emitExchangeObservation(epoch uint64, state Exchan
 		}
 		s.expiryTimer = time.AfterFunc(delay, func() { s.invalidateExchangeObservation(epoch) })
 	}
+	s.clearRecoveryLocked()
 	s.emit(state)
 }
 
 // invalidateExchangeObservation clears current money without manufacturing a
-// zero-valued state or starting a venue/API retry. A coherent push restores it.
+// zero-valued state. A coherent push restores it; failing that, the bounded
+// recovery read does.
 func (s *ExchangeWatchStream) invalidateExchangeObservation(epoch uint64) {
 	s.observationMu.Lock()
 	defer s.observationMu.Unlock()
@@ -623,8 +727,8 @@ func (s *ExchangeWatchStream) invalidateExchangeObservation(epoch uint64) {
 		s.expiryTimer.Stop()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	s.value = ExchangeState{}
@@ -639,6 +743,51 @@ drain:
 		}
 	}
 	s.notifyStateLocked(WatchReconnecting)
+	s.mu.Unlock()
+	s.scheduleRecoveryLocked()
+}
+
+// scheduleRecoveryLocked arms the next fallback read of an invalidated
+// observation. Caller holds observationMu. Re-armed after each attempt and
+// cancelled by emitExchangeObservation the moment a state is restored, so it
+// only ever runs while the stream is empty.
+func (s *ExchangeWatchStream) scheduleRecoveryLocked() {
+	if s.recoveryTimer != nil {
+		s.recoveryTimer.Stop()
+	}
+	base := exchangeRecoveryInitial << uint(s.recoveryAttempt)
+	if base > exchangeRecoveryMax || base <= 0 {
+		base = exchangeRecoveryMax
+	}
+	if s.recoveryAttempt < 10 {
+		s.recoveryAttempt++
+	}
+	jitter := time.Duration(float64(base) * 0.2 * (rand.Float64()*2 - 1))
+	s.recoveryTimer = time.AfterFunc(base+jitter, func() {
+		s.mu.Lock()
+		empty := !s.hasValue && !s.closed
+		s.mu.Unlock()
+		if !empty {
+			return
+		}
+		s.Refresh()
+		s.observationMu.Lock()
+		defer s.observationMu.Unlock()
+		s.mu.Lock()
+		stillEmpty := !s.hasValue && !s.closed
+		s.mu.Unlock()
+		if stillEmpty {
+			s.scheduleRecoveryLocked()
+		}
+	})
+}
+
+func (s *ExchangeWatchStream) clearRecoveryLocked() {
+	if s.recoveryTimer != nil {
+		s.recoveryTimer.Stop()
+		s.recoveryTimer = nil
+	}
+	s.recoveryAttempt = 0
 }
 
 // FillWatchStream streams fills (preview + recorded) for an exchange object.

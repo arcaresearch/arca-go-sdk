@@ -368,6 +368,29 @@ operation before requesting account-scoped history. It rejects a different accou
 and never submits a replacement. `Filled` retains its full-order return type and
 performs a metadata read after execution; unavailable or stale details remain an
 error. Use `ExecutionReceipt` for prompt confirmation.
+
+### Execution vs. accounting: `Accounted`
+
+The receipt proves terminal execution at the venue. The ledger commit that updates
+the account's positions and balances happens afterwards, and a
+`GetExchangeState` / `WatchExchangeState` read taken in between returns the
+pre-accounting snapshot. `OrderHandle.Accounted(ctx)` returns once every executed
+quantity is recorded (the platform's `FillsComplete`), so an account read taken
+after it includes the execution; refresh account state on it, not on the receipt.
+Push-first — each `fill.recorded` for the order, a delivery gap, or a reconnect
+triggers one order read — with a bounded backoff read (500 ms doubling to 8 s)
+for a lost push, until ctx expires (pass a deadline-bound ctx; it returns
+`ctx.Err()`). On venues whose order read carries no `FillsComplete`, completion is
+the recorded fills for the order covering its executed size exactly (`big.Rat`,
+never float). A zero-fill terminal order returns at once; a failed placement
+returns the failure. When it returns, any live `WatchExchangeState` for the account
+is refreshed.
+
+`WatchExchangeState` re-reads on a `deliverySeq` gap or `stream.resync` marker, on
+reconnect, and — on a 1 s→30 s backoff — while an observation is invalidated
+(`exchangeStateUnavailable` / expired `validUntil`); every re-read is guarded by the
+observation epoch so an older read never overwrites a newer push.
+`stream.Refresh()` re-reads on demand (non-blocking, coalesced).
 ## General operation recovery
 
 Operation waits register listeners before subscribing. Startup, actual gaps, reauthentication and sparse operation notifications recover behind a fresh correlated ACK, with at most three failed attempts. Healthy pending operations do not poll. Terminal pushes win during recovery; cancellation releases only the owned watch. No timeout automatically replays a mutation.

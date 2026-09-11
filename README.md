@@ -270,6 +270,15 @@ operation before requesting account-scoped history. It rejects a different accou
 and never submits a replacement. `Filled` retains its full-order return type and
 performs a metadata read after execution; unavailable or stale details remain an
 error. Use `ExecutionReceipt` for prompt confirmation.
+
+Execution and accounting are separate events. The receipt proves the venue filled
+the order; the ledger commit that updates the account's positions and balances
+happens afterwards, so an exchange-state read taken in between returns the
+pre-accounting snapshot. `OrderHandle.Accounted(ctx)` returns once every executed
+quantity is recorded (the platform's `FillsComplete`) — refresh account state on
+it, not on the receipt. It is push-first with a bounded backoff read for a lost
+push, honours the ctx deadline, and refreshes any live `WatchExchangeState` for
+the account when it returns.
 ## Operation wait recovery
 
 `WaitForOperation` listens before acquiring its subscription. Startup and actual

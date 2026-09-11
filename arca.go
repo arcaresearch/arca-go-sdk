@@ -20,14 +20,62 @@ var (
 
 func isIDFormat(v string) bool { return uuidRe.MatchString(v) || typeidRe.MatchString(v) }
 
+func (a *Arca) registerExchangeWatch(objectID string, s *ExchangeWatchStream) {
+	a.exchangeWatchMu.Lock()
+	defer a.exchangeWatchMu.Unlock()
+	if a.exchangeWatches == nil {
+		a.exchangeWatches = map[string]map[*ExchangeWatchStream]struct{}{}
+	}
+	set := a.exchangeWatches[objectID]
+	if set == nil {
+		set = map[*ExchangeWatchStream]struct{}{}
+		a.exchangeWatches[objectID] = set
+	}
+	set[s] = struct{}{}
+}
+
+func (a *Arca) unregisterExchangeWatch(objectID string, s *ExchangeWatchStream) {
+	a.exchangeWatchMu.Lock()
+	defer a.exchangeWatchMu.Unlock()
+	set := a.exchangeWatches[objectID]
+	if set == nil {
+		return
+	}
+	delete(set, s)
+	if len(set) == 0 {
+		delete(a.exchangeWatches, objectID)
+	}
+}
+
+// refreshExchangeWatches asks every live WatchExchangeState for objectID to
+// re-read. Called when an order's accounting completion was learned through a
+// read — the moment the account push for that commit is most likely lost.
+func (a *Arca) refreshExchangeWatches(objectID string) {
+	a.exchangeWatchMu.Lock()
+	streams := make([]*ExchangeWatchStream, 0, len(a.exchangeWatches[objectID]))
+	for s := range a.exchangeWatches[objectID] {
+		streams = append(streams, s)
+	}
+	a.exchangeWatchMu.Unlock()
+	for _, s := range streams {
+		s.Refresh()
+	}
+}
+
 // Arca is the SDK client. Create one with New, FromToken, or FromTokenProvider.
 // Call Ready before issuing requests (or rely on lazy resolution — every method
 // resolves the realm on first use).
 type Arca struct {
 	orderStreamsMu sync.Mutex
 	orderStreams   map[*orderStream]struct{}
-	client         *httpClient
-	ws             *WebSocketManager
+	// exchangeWatches holds the live WatchExchangeState streams by object id,
+	// so an order handle that learns its accounting completed through a read
+	// (the moment the account push for that commit is most likely to have been
+	// lost) can ask the account's watch to re-read. Streams unregister on Close.
+	exchangeWatchMu sync.Mutex
+	exchangeWatches map[string]map[*ExchangeWatchStream]struct{}
+	client          *httpClient
+	ws              *WebSocketManager
 
 	credType credentialType
 	apiKey   string

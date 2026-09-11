@@ -238,6 +238,7 @@ func (a *Arca) orderHandleDeps() orderHandleDeps {
 		listFills: func(ctx context.Context, objectID string) (FillListResponse, error) {
 			return a.ListFills(ctx, objectID, nil)
 		},
+		exchangeStateChanged: a.refreshExchangeWatches,
 	}
 }
 

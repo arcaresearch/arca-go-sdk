@@ -144,7 +144,18 @@ type orderHandleDeps struct {
 	cancelOrder           func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse]
 	modifyOrder           func(ctx context.Context, opts ModifyOrderOptions) *OperationHandle[OrderOperationResponse]
 	listFills             func(ctx context.Context, objectID string) (FillListResponse, error)
+	// exchangeStateChanged tells any live exchange-state watch for the object
+	// that its account changed, so it re-reads. Called when accounting
+	// completion was learned through a REST read — the moment a lost account
+	// push is most likely. Optional.
+	exchangeStateChanged func(objectID string)
 }
+
+// Bounded fallback-read schedule for OrderHandle.Accounted.
+const (
+	accountedReadInitial = 500 * time.Millisecond
+	accountedReadMax     = 8 * time.Second
+)
 
 // OrderHandle extends OperationHandle for the order lifecycle. Wait means "the
 // order was placed". Fills and cancellation are separate concerns accessed via
@@ -459,6 +470,185 @@ func (h *OrderHandle) waitExecutionEvidence(ctx context.Context) (SimOrderWithFi
 		}
 	}
 
+}
+
+// Accounted waits until the account reflects this order's execution.
+//
+// ExecutionReceipt proves terminal execution at the venue; the ledger commit
+// that updates the account's positions and balances happens afterwards, and
+// an exchange-state read taken in between returns the pre-accounting
+// snapshot. Accounted returns once every executed quantity is recorded — the
+// platform's fillsComplete — so a GetExchangeState / WatchExchangeState
+// observation taken after it includes the execution. A live
+// WatchExchangeState for the account is refreshed when completion had to be
+// learned through a read.
+//
+// Push-first: each fill.recorded for this order triggers one order read, as
+// do delivery gaps and reconnects. A lost push is covered by a bounded
+// backoff read (500ms doubling to 8s) until ctx expires. On venues whose
+// order read carries no fillsComplete, completion is the recorded fills for
+// the order covering its executed size exactly.
+//
+// Returns for a zero-fill terminal order too (nothing to account). Returns
+// the placement failure, or ctx.Err() when accounting has not completed
+// before the deadline — pass a deadline-bound ctx.
+func (h *OrderHandle) Accounted(ctx context.Context) (SimOrderWithFills, error) {
+	var zero SimOrderWithFills
+	trigger := make(chan struct{}, 1)
+	kick := func() {
+		select {
+		case trigger <- struct{}{}:
+		default:
+		}
+	}
+	// Identity is learned from the receipt; until then any recorded fill on
+	// this account is a reason to look. The fill subscription also holds the
+	// realm-root watch, so fill.recorded frames reach this socket even when
+	// the application holds no other watch covering the account.
+	var identity atomic.Value
+	identity.Store([2]string{"", ""})
+	if h.deps.onFillEvent != nil {
+		unsub := h.deps.onFillEvent(func(ev RealmEvent) {
+			if ev.Type != EventFillRecorded || ev.Fill == nil || ev.Fill.IsOptimistic {
+				return
+			}
+			ids := identity.Load().([2]string)
+			if ids[0] == "" || recordedFillMatches(ev.Fill, ids[0], ids[1]) {
+				kick()
+			}
+		})
+		defer unsub()
+	}
+	if h.deps.onExecutionGap != nil {
+		defer h.deps.onExecutionGap(kick)()
+	}
+	receipt, err := h.ExecutionReceipt(ctx)
+	if err != nil {
+		return zero, err
+	}
+	orderID, operationID := receipt.OrderID, receipt.OperationID
+	identity.Store([2]string{orderID, operationID})
+
+	// The fallback for a lost push: exchange.updated / fill.recorded have no
+	// durable log, and a deferred enrichment is dropped without a
+	// deliverySeq, so a quiet socket proves nothing.
+	backoff := accountedReadInitial
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	kick()
+	for {
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-trigger:
+		case <-timer.C:
+			if backoff < accountedReadMax {
+				backoff *= 2
+				if backoff > accountedReadMax {
+					backoff = accountedReadMax
+				}
+			}
+			timer.Reset(backoff)
+		}
+		detail, err := h.deps.getOrder(ctx, h.objectID, orderID)
+		if err != nil {
+			var failure *OperationFailedError
+			if errors.As(err, &failure) {
+				return zero, err
+			}
+			continue // transient read failure: the next trigger re-reads
+		}
+		if detail.Order.ID != orderID {
+			continue
+		}
+		done, err := h.isAccounted(ctx, detail, orderID, operationID)
+		if err != nil || !done {
+			continue
+		}
+		// Completion was established by a read. The account push for this
+		// commit travels a different path (the mirror relay) from the
+		// fill.recorded push that may have triggered the read, so seeing one
+		// proves nothing about the other: always nudge the account watch.
+		// Its re-read coalesces with any push-triggered read in flight.
+		if h.deps.exchangeStateChanged != nil {
+			h.deps.exchangeStateChanged(h.objectID)
+		}
+		return detail, nil
+	}
+}
+
+// isAccounted is the completion check with the venue-read fallback: when the
+// order read does not carry the platform's accounting view, the
+// platform-recorded fills for the order must cover its executed size exactly
+// (a zero-fill terminal order is trivially covered).
+func (h *OrderHandle) isAccounted(ctx context.Context, detail SimOrderWithFills, orderID, operationID string) (bool, error) {
+	if detail.FillsComplete != nil {
+		return *detail.FillsComplete, nil
+	}
+	if !isTerminalOrderStatus(detail.Order.Status) {
+		return false, nil
+	}
+	executed := detail.Order.FilledSize
+	if recordedSizesCover(nil, executed) {
+		return true, nil
+	}
+	if h.deps.listFills == nil {
+		return false, nil
+	}
+	recorded, err := h.deps.listFills(ctx, h.objectID)
+	if err != nil {
+		return false, err
+	}
+	var sizes []string
+	for i := range recorded.Fills {
+		f := &recorded.Fills[i]
+		if f.OperationID == "" {
+			continue
+		}
+		if (f.OrderID != "" && f.OrderID == orderID) || (f.OrderOperationID != "" && f.OrderOperationID == operationID) {
+			sizes = append(sizes, f.Size)
+		}
+	}
+	return len(sizes) > 0 && recordedSizesCover(sizes, executed), nil
+}
+
+// recordedFillMatches reports whether a platform-recorded fill belongs to this
+// order. Recorded fills carry the venue order id and the placement operation
+// id; a bracket child that was still pending when it filled is matched by the
+// latter.
+func recordedFillMatches(f *SimFill, orderID, operationID string) bool {
+	if f.OrderID != "" && f.OrderID == orderID {
+		return true
+	}
+	if f.OrderOperationID != "" && f.OrderOperationID == operationID {
+		return true
+	}
+	return false
+}
+
+// recordedSizesCover reports whether the recorded sizes sum to exactly the
+// executed size. Sizes cross the wire as decimal strings and never round-trip
+// through a float here — 0.1 + 0.2 must cover 0.3.
+func recordedSizesCover(sizes []string, executed string) bool {
+	if !executionDecimal.MatchString(executed) {
+		return false
+	}
+	expected, ok := new(big.Rat).SetString(executed)
+	if !ok {
+		return false
+	}
+	total := new(big.Rat)
+	for _, raw := range sizes {
+		if !executionDecimal.MatchString(raw) {
+			return false
+		}
+		size, ok := new(big.Rat).SetString(raw)
+		if !ok {
+			return false
+		}
+		total.Add(total, size)
+	}
+	return total.Cmp(expected) == 0
 }
 
 // OnFill registers a callback for each fill on this order. It returns an
