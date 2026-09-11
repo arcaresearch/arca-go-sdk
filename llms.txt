@@ -386,6 +386,21 @@ never float). A zero-fill terminal order returns at once; a failed placement
 returns the failure. When it returns, any live `WatchExchangeState` for the account
 is refreshed.
 
+### Attaching to an order placed elsewhere
+
+`OrderHandleFor(ctx, objectID, operationID)` returns an `*OrderHandle` for an order
+this client did not place. Every other order factory is a mutation, so a caller
+holding only an operation id had no supported way to obtain a handle; calling
+`PlaceOrder` again would be a second submission, not a read. This performs one
+`GetOperation` read and binds the handle to that order, so `Accounted`,
+`ExecutionReceipt`, `Filled`, `Fills` and `OnFill` work on it exactly as on a placed
+order. It places, cancels and resizes nothing; `Cancel` / `Resize` remain explicit
+opt-in mutations. An operation that is not an order, or whose recorded input names a
+different `exchangeObjectId`, returns `ORDER_IDENTITY_MISMATCH` — an id from another
+account never resolves into a handle on this one; absent input is not a mismatch.
+`Confirmed`'s immediate/resting classification is reconstructed from the operation's
+recorded intent. As with `PlaceOrder`, ctx governs the handle's event capture.
+
 `WatchExchangeState` re-reads on a `deliverySeq` gap or `stream.resync` marker, on
 reconnect, and — on a 1 s→30 s backoff — while an observation is invalidated
 (`exchangeStateUnavailable` / expired `validUntil`); every re-read is guarded by the

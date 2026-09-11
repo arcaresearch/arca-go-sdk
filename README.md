@@ -279,6 +279,12 @@ quantity is recorded (the platform's `FillsComplete`) — refresh account state 
 it, not on the receipt. It is push-first with a bounded backoff read for a lost
 push, honours the ctx deadline, and refreshes any live `WatchExchangeState` for
 the account when it returns.
+
+`OrderHandleFor(ctx, objectID, operationID)` attaches to an order this client did
+not place — for integrations whose own backend submits the orders and hold only an
+operation id. One `GetOperation` read binds the handle; it places, cancels and
+resizes nothing. An operation that is not an order, or that records a different
+exchange account, returns `ORDER_IDENTITY_MISMATCH`.
 ## Operation wait recovery
 
 `WaitForOperation` listens before acquiring its subscription. Startup and actual
