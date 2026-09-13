@@ -368,6 +368,13 @@ type ExchangeState struct {
 	OpenOrders                 []SimOrder              `json:"openOrders"`
 	FeeRates                   *SimFeeRates            `json:"feeRates,omitempty"`
 	PendingIntents             []ExchangeIntent        `json:"pendingIntents"`
+	// AccountingPending names every venue-confirmed execution the ledger
+	// behind this observation has not folded into Positions and MarginSummary
+	// yet. Compose with ProjectedPositions; hold money while
+	// !AccountingSettled(). Absent when nothing is pending, and on venues
+	// whose accounting is synchronous with execution. See
+	// AccountingPendingExecution.
+	AccountingPending []AccountingPendingExecution `json:"accountingPending,omitempty"`
 }
 
 type AssetFeeEntry struct {

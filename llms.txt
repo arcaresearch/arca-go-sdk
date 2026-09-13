@@ -386,6 +386,27 @@ never float). A zero-fill terminal order returns at once; a failed placement
 returns the failure. When it returns, any live `WatchExchangeState` for the account
 is refreshed.
 
+### The observation says what it does not include yet: `AccountingPending`
+
+On the platform mirror every `ExchangeState` (REST and stream) carries
+`AccountingPending []AccountingPendingExecution`: one entry per venue-confirmed
+execution the ledger has not fully recorded, with `OperationID`, `OrderID`,
+`Market`, `Side`, `ExecutedSize`, `AccountedSize`, `UnaccountedSize` (executed
+minus accounted — the only quantity to add on top of `Positions`),
+`ExecutionFinal` and a provisional `AveragePrice`. The frame emitted at execution
+time lists the whole execution, each per-fill frame lists what is still missing,
+the settled frame lists nothing, so `Positions + AccountingPending` is the same
+book on every frame and no reader has to guess whether a frame is "after" an
+execution — whoever placed the order. `state.ProjectedPositions()` composes it
+(reductions keep their entry, increases blend by quantity, opens/reversals take
+the execution price, flat markets vanish, a malformed entry falls back to the
+ledger row); `state.AccountingSettled()` is `len(AccountingPending) == 0`.
+Render the projection; apply a frame's money only when settled — realized P&L
+and fees are ledger facts and are never projected. Absent on venues whose
+accounting is synchronous with execution. `Accounted` remains the per-order
+wait; this is the per-observation description that makes the wait unnecessary
+for display.
+
 ### Attaching to an order placed elsewhere
 
 `OrderHandleFor(ctx, objectID, operationID)` returns an `*OrderHandle` for an order
