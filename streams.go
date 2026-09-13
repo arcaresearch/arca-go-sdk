@@ -687,6 +687,16 @@ func (s *ExchangeWatchStream) emitExchangeObservation(epoch uint64, state Exchan
 	if s.observationEpoch != epoch {
 		return
 	}
+	// The epoch orders this read against pushes that arrived while it was in
+	// flight; the read time orders it against the state already applied. A
+	// frame the platform read before that state describes an older ledger — a
+	// pre-fill snapshot resolving late — and must not replace it.
+	s.mu.Lock()
+	applied, hasApplied := s.value, s.hasValue
+	s.mu.Unlock()
+	if hasApplied && state.ObservedBefore(applied) {
+		return
+	}
 	s.observationEpoch++
 	epoch = s.observationEpoch
 	if s.expiryTimer != nil {

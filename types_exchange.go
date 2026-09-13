@@ -375,6 +375,10 @@ type ExchangeState struct {
 	// whose accounting is synchronous with execution. See
 	// AccountingPendingExecution.
 	AccountingPending []AccountingPendingExecution `json:"accountingPending,omitempty"`
+	// ObservedAt is when the platform began the read this observation came
+	// from (RFC 3339, nanoseconds). Observations of one account are ordered
+	// by it; see ObservedBefore. Empty from a platform that predates the field.
+	ObservedAt string `json:"observedAt,omitempty"`
 }
 
 type AssetFeeEntry struct {
