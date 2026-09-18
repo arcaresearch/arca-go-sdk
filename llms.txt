@@ -139,6 +139,12 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Prepare custody tx | arca.PrepareLockBoundary/PrepareWithdraw/PrepareAssignRecoveryKey/... |
 | Reconciliation | client.ListReconciliationState(ctx) |
 | Invariant check | client.CheckInvariants(ctx, limit, realmId) |
+| Register an external wallet for observation | client.RegisterAddressWatch(ctx, RegisterAddressWatchRequest{RealmID?, ChainID, TokenAddress, Address}) → {Watch, Created, Cursor} — idempotent over the normalised (realm, chain, token, address); Created=false when it already existed (HTTP 200); Cursor is the realm feed cursor at registration |
+| Read one watch | client.GetAddressWatch(ctx, watchID) — stored snapshot, works with the chain provider down; another realm's watch is 404 |
+| Consistent snapshot of watches | client.ListAddressWatchSnapshot(ctx, pageToken, limit) → {ReadAt, Cursor, Watches, NextPageToken} — every page at ONE read timestamp; replay /changes from Cursor; an expired token (30m) is *ObservationCursorExpiredError, restart with "" |
+| Bounded replay after a cursor | client.ListAddressObservationChanges(ctx, after, limit) → {Events, OldestValidCursor, CurrentCursor, NextCursor, HasMore} — after "" = oldest retained; ≤100 events / 256 KiB per page, a commit group is never split |
+| Observer health | client.GetAddressObservationHealth(ctx) — worker enabled, lease holder/epoch/expiry, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
+| Stream observation events with durable cursor | client.RunAddressObservationStream(ctx, after, func(AddressObservationBatch) error) — reconnects with jittered backoff from the last ACCEPTED cursor; StreamAddressObservations(ctx, after, accept) for one connection (returns *ObservationStreamDisconnectedError{LastCursor} on EOF) |
 
 ## Venue-to-venue hops
 
@@ -249,6 +255,27 @@ change is emitted across a rotation and there is no delivery gap; OnRotated
 fires for per-connection server state that the swap cannot carry over (watch
 streams handle their own). WS().RotateConnection() forces one, returning false
 when there is no healthy connection or a handoff is already under way.
+
+## Address observations
+
+Read-only watching of EXTERNAL wallets for ERC-20 Transfer logs on one configured
+chain/token (HyperEVM 999 / USDC first), delivered as durable, replayable events
+with a contiguous per-realm Sequence (a gap is lost delivery, never a legitimate
+hole). Disabled by default on every deployment; a realm must be admitted by the
+operator (403 OBSERVATION_REALM_NOT_ADMITTED / 503 OBSERVATION_DISABLED until then).
+An observation is a fact about a public chain — never a ledger credit or a spending
+authorisation; coalesce arrivals into your own authorised follow-up job.
+Amounts, chain ids, block numbers, sequences and revisions are decimal STRINGS in
+raw token units ("1000000" = 1 USDC): parse with math/big, never float64.
+Effect.FundingDelta is the receipt amount (positive incoming; "0" for outgoing,
+self, zero-value and transfer.removed); DeltaRaw is signed bookkeeping — never
+trigger forwarding from it. Persist batch.Cursor in the SAME transaction as your
+inbox and dedupe by EventID (stable; redelivery is normal). Typed errors:
+*ObservationCursorExpiredError (take a snapshot, rebuild, record the gap — never
+invent receipts from a balance difference), *ObservationStreamResetError
+(reset_required control frame), *ObservationStreamDisconnectedError{LastCursor}
+(EOF; RunAddressObservationStream retries it), *ObservationSchemaError (unknown
+schemaVersion — upgrade, do not guess). Contract: documents/contracts/address-observations.md.
 
 ## Admin (realm-less builder client)
 
