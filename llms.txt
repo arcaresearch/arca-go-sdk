@@ -143,7 +143,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Read one watch | client.GetAddressWatch(ctx, watchID) — stored snapshot, works with the chain provider down; another realm's watch is 404 |
 | Consistent snapshot of watches | client.ListAddressWatchSnapshot(ctx, pageToken, limit) → {ReadAt, Cursor, Watches, NextPageToken} — every page at ONE read timestamp; replay /changes from Cursor; an expired token (30m) is *ObservationCursorExpiredError, restart with "" |
 | Bounded replay after a cursor | client.ListAddressObservationChanges(ctx, after, limit) → {Events, OldestValidCursor, CurrentCursor, NextCursor, HasMore} — after "" = oldest retained; ≤100 events / 256 KiB per page, a commit group is never split |
-| Observer health | client.GetAddressObservationHealth(ctx) — worker enabled, lease holder/epoch/expiry, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
+| Observer health | client.GetAddressObservationHealth(ctx) — OwnerLeaseLive (the observer's latest checkpoint is fresh), OwnerHolder (the observer replica that published it), LastCheckpointAt, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
 | Stream observation events with durable cursor | client.RunAddressObservationStream(ctx, after, func(AddressObservationBatch) error) — reconnects with jittered backoff from the last ACCEPTED cursor; StreamAddressObservations(ctx, after, accept) for one connection (returns *ObservationStreamDisconnectedError{LastCursor} on EOF) |
 
 ## Venue-to-venue hops
