@@ -197,7 +197,7 @@ type AddressObservationChanges struct {
 //
 // OwnerHolder is the observer replica that published the scope's most
 // recent checkpoint and OwnerLeaseLive is true while that checkpoint is
-// fresh (younger than three head polls); LastCheckpointAt is its
+// fresh (at most a couple of minutes old); LastCheckpointAt is its
 // timestamp. A live observer with `fault` set is stopped by design and
 // waits for an operator.
 type AddressObservationHealth struct {
