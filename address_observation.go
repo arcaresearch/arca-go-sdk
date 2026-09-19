@@ -194,15 +194,20 @@ type AddressObservationChanges struct {
 }
 
 // AddressObservationHealth is the observer's health for the realm's scope.
+//
+// OwnerHolder is the observer replica that published the scope's most
+// recent checkpoint and OwnerLeaseLive is true while that checkpoint is
+// fresh (younger than three head polls); LastCheckpointAt is its
+// timestamp. A live observer with `fault` set is stopped by design and
+// waits for an operator.
 type AddressObservationHealth struct {
 	RealmID              string  `json:"realmId"`
 	Scope                string  `json:"scope"`
 	ChainID              string  `json:"chainId"`
 	TokenAddress         string  `json:"tokenAddress"`
 	OwnerHolder          string  `json:"ownerHolder,omitempty"`
-	OwnerEpoch           string  `json:"ownerEpoch,omitempty"`
-	OwnerLeaseExpiresAt  string  `json:"ownerLeaseExpiresAt,omitempty"`
 	OwnerLeaseLive       bool    `json:"ownerLeaseLive"`
+	LastCheckpointAt     string  `json:"lastCheckpointAt,omitempty"`
 	CompleteThroughBlock *string `json:"completeThroughBlock"`
 	ObservedHead         *string `json:"observedHead"`
 	FinalityStatus       string  `json:"finalityStatus"`
