@@ -199,7 +199,6 @@ type AddressObservationHealth struct {
 	Scope                string  `json:"scope"`
 	ChainID              string  `json:"chainId"`
 	TokenAddress         string  `json:"tokenAddress"`
-	WorkerEnabled        bool    `json:"workerEnabled"`
 	OwnerHolder          string  `json:"ownerHolder,omitempty"`
 	OwnerEpoch           string  `json:"ownerEpoch,omitempty"`
 	OwnerLeaseExpiresAt  string  `json:"ownerLeaseExpiresAt,omitempty"`
