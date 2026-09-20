@@ -145,6 +145,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Bounded replay after a cursor | client.ListAddressObservationChanges(ctx, after, limit) → {Events, OldestValidCursor, CurrentCursor, NextCursor, HasMore} — after "" = oldest retained; ≤100 events / 256 KiB per page, a commit group is never split |
 | Observer health | client.GetAddressObservationHealth(ctx) — OwnerLeaseLive (the observer's latest checkpoint is fresh), OwnerHolder (the observer replica that published it), LastCheckpointAt, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
 | Stream observation events with durable cursor | client.RunAddressObservationStream(ctx, after, func(AddressObservationBatch) error) — reconnects with jittered backoff from the last ACCEPTED cursor; StreamAddressObservations(ctx, after, accept) for one connection (returns *ObservationStreamDisconnectedError{LastCursor} on EOF) |
+| Keep one wallet's Wallet Account current (push, not poll) | client.RunCashV9WalletAccountStream(ctx, boundaryID, func(CashV9WalletAccount) error) — SSE of COMPLETE snapshots (on connect and after every boundary or source change; coalesced to ≤1 per 250 ms), automatic resume from the last Revision as Last-Event-ID, 1 s→30 s backoff; returns on ctx, a callback error, or a refused connection (*NotFoundError, *ForbiddenError, 429 per-key cap). StreamCashV9WalletAccount is the single connection (returns *CashV9WalletAccountStreamDisconnectedError with LastRevision) |
 | One owner-facing wallet, rendered as-is | client.GetCashV9WalletAccount(ctx, boundaryID) / GetCashV9WalletAccountByOwner(ctx, ownerAddress) → CashV9WalletAccount — WalletState (setup_required · setting_up · ready · needs_attention · unavailable) + Attention reasons, Balances{ConfirmedMicro, AvailableMicro, ReservedMicro, PendingInMicro, PendingOutMicro, AsOf}, Source (linked external address: BalanceMicro nil when unknown, Health, its own AsOf), Operations[] (kind create_cash/send/deposit/receiver; state sending/confirming/completed/failed; Reason only when failed; CanRetry), Revision. Durable records only, no chain call; *NotFoundError for an unknown boundary/owner; arca:ReadObject is enough (a realm-scoped device token works) |
 
 ## Venue-to-venue hops
@@ -297,6 +298,20 @@ records; Arca has no operation before a signature is accepted. AutoDeposit is ni
 until Arca observes adapter routes. Fixtures for every state:
 backend/libs/arca-go/cashv9/testdata/wallet-account/. Contract:
 documents/contracts/v9-cash-wallet-integration.md ("Wallet Account read model").
+
+Stream instead of poll: RunCashV9WalletAccountStream(ctx, boundaryID, accept)
+delivers a COMPLETE CashV9WalletAccount on connect and after every change to the
+boundary (change journal) or to the linked address (observation feed), at most
+one per 250 ms; heartbeats every 20 s. Every frame is the whole state, so a
+missed frame costs latency, never correctness — treat each callback as "replace
+what you show". Resume is automatic: the last snapshot's Revision is sent as
+Last-Event-ID and the server answers with one fresh snapshot (the ingress resets
+connections about hourly; Run reconnects with 1 s→30 s backoff and resets it
+after a delivered snapshot). It returns only on ctx cancellation, a callback
+error, or a refused connection: *NotFoundError (unknown boundary),
+*ForbiddenError, or a 429 (code V9_WALLET_ACCOUNT_STREAMS_EXCEEDED) when one key
+holds more than the per-replica cap (16 by default) — shard keys per product
+backend rather than retrying. Do not hold a stream AND poll GetCashV9WalletAccount.
 
 ## Admin (realm-less builder client)
 
