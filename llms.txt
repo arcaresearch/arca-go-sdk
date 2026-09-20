@@ -145,6 +145,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Bounded replay after a cursor | client.ListAddressObservationChanges(ctx, after, limit) → {Events, OldestValidCursor, CurrentCursor, NextCursor, HasMore} — after "" = oldest retained; ≤100 events / 256 KiB per page, a commit group is never split |
 | Observer health | client.GetAddressObservationHealth(ctx) — OwnerLeaseLive (the observer's latest checkpoint is fresh), OwnerHolder (the observer replica that published it), LastCheckpointAt, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
 | Stream observation events with durable cursor | client.RunAddressObservationStream(ctx, after, func(AddressObservationBatch) error) — reconnects with jittered backoff from the last ACCEPTED cursor; StreamAddressObservations(ctx, after, accept) for one connection (returns *ObservationStreamDisconnectedError{LastCursor} on EOF) |
+| One owner-facing wallet, rendered as-is | client.GetCashV9WalletAccount(ctx, boundaryID) / GetCashV9WalletAccountByOwner(ctx, ownerAddress) → CashV9WalletAccount — WalletState (setup_required · setting_up · ready · needs_attention · unavailable) + Attention reasons, Balances{ConfirmedMicro, AvailableMicro, ReservedMicro, PendingInMicro, PendingOutMicro, AsOf}, Source (linked external address: BalanceMicro nil when unknown, Health, its own AsOf), Operations[] (kind create_cash/send/deposit/receiver; state sending/confirming/completed/failed; Reason only when failed; CanRetry), Revision. Durable records only, no chain call; *NotFoundError for an unknown boundary/owner; arca:ReadObject is enough (a realm-scoped device token works) |
 
 ## Venue-to-venue hops
 
@@ -276,6 +277,26 @@ invent receipts from a balance difference), *ObservationStreamResetError
 (reset_required control frame), *ObservationStreamDisconnectedError{LastCursor}
 (EOF; RunAddressObservationStream retries it), *ObservationSchemaError (unknown
 schemaVersion — upgrade, do not guess). Contract: documents/contracts/address-observations.md.
+
+## V9 cash Wallet Account (one read per wallet)
+
+GetCashV9WalletAccount composes what a wallet screen needs from Arca's durable
+records — the V9 cash boundary plus the address watch on its owner — so a product
+renders it instead of re-deriving it from the account read, the observer and chain
+calls. Money is micro-USDC integer STRINGS (parse with math/big). Every figure
+carries an AsOf {Block, Hash, Time}: Balances.AsOf is the realm's confirmed
+observation cursor, Source.AsOf the observer's complete-through checkpoint; they
+may differ — show the older one, never block on equality. Freshness is not a state:
+WalletState says whether the account is usable (unavailable = the durable
+projection disagrees with the journal; balances are still returned as last-known),
+not whether the data is recent. Operations lists every non-terminal operation plus
+30 days of terminal ones (≤200, newest first); ReservedMicro == PendingOutMicro by
+design (ledger hold vs the owner's "money leaving"). awaiting_approval (unsigned
+intent) and uncertain (lost reply) are states the PRODUCT layer adds from its own
+records; Arca has no operation before a signature is accepted. AutoDeposit is nil
+until Arca observes adapter routes. Fixtures for every state:
+backend/libs/arca-go/cashv9/testdata/wallet-account/. Contract:
+documents/contracts/v9-cash-wallet-integration.md ("Wallet Account read model").
 
 ## Admin (realm-less builder client)
 

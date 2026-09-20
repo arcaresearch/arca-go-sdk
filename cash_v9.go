@@ -31,7 +31,14 @@ type CashV9Operation struct {
 	Amount              string `json:"amount,omitempty"`
 	TxHash              string `json:"txHash,omitempty"`
 	CreatedAt           string `json:"createdAt"`
-	Error               string `json:"error,omitempty"`
+	// UpdatedAt is the last status transition (or transaction attach); empty
+	// on operations recorded before it existed.
+	UpdatedAt string `json:"updatedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
+	// Reason is the bounded failure code when Status is "failed":
+	// consent_expired, reverted, rejected, destination_refused,
+	// recovery_started, cancelled or unknown. Error stays operator text.
+	Reason string `json:"reason,omitempty"`
 }
 type CashV9Account struct {
 	BoundaryID           string                 `json:"boundaryId"`
@@ -137,6 +144,110 @@ func (a *Arca) GetCashV9Boundary(ctx context.Context, boundaryID string) (CashV9
 		return out, err
 	}
 	err = a.client.get(ctx, "/custody/v9/cash/account", url.Values{"realmId": {rid}, "boundaryId": {boundaryID}}, &out)
+	return out, err
+}
+
+// CashV9AsOf is the point a figure is valid through. Hash and Time are empty
+// when the record predates their recording.
+type CashV9AsOf struct {
+	Block uint64 `json:"block"`
+	Hash  string `json:"hash,omitempty"`
+	Time  string `json:"time,omitempty"`
+}
+
+// CashV9WalletBalances are micro-USDC integers as strings. ReservedMicro and
+// PendingOutMicro are one figure seen from two sides (the ledger hold; the
+// owner's money leaving). Every cash figure shares AsOf: the realm's confirmed
+// observation cursor.
+type CashV9WalletBalances struct {
+	ConfirmedMicro  string     `json:"confirmedMicro"`
+	AvailableMicro  string     `json:"availableMicro"`
+	ReservedMicro   string     `json:"reservedMicro"`
+	PendingInMicro  string     `json:"pendingInMicro"`
+	PendingOutMicro string     `json:"pendingOutMicro"`
+	AsOf            CashV9AsOf `json:"asOf"`
+}
+
+// CashV9WalletSource is the external address linked to the wallet as the
+// address observer projects it. BalanceMicro is nil when unknown — never "0"
+// as a stand-in. Health values are the address-observation contract's.
+type CashV9WalletSource struct {
+	Address              string     `json:"address"`
+	BalanceMicro         *string    `json:"balanceMicro"`
+	Health               string     `json:"health"`
+	CompleteThroughBlock uint64     `json:"completeThroughBlock"`
+	AsOf                 CashV9AsOf `json:"asOf"`
+}
+
+// CashV9WalletAutoDeposit is the automatic-deposit route state; nil until
+// Arca observes it (Wallet Account stream, step 08).
+type CashV9WalletAutoDeposit struct {
+	State          string     `json:"state"`
+	RouteID        string     `json:"routeId,omitempty"`
+	AllowanceMicro string     `json:"allowanceMicro,omitempty"`
+	AsOf           CashV9AsOf `json:"asOf"`
+}
+
+// CashV9WalletOperation is one owner-started operation. Kind is create_cash,
+// send, deposit, receiver (allowance and policy later); State is sending,
+// confirming, completed or failed (awaiting_approval and uncertain are
+// product-layer states); Reason is set only when failed.
+type CashV9WalletOperation struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	State       string `json:"state"`
+	Reason      string `json:"reason,omitempty"`
+	AmountMicro string `json:"amountMicro"`
+	Destination string `json:"destination,omitempty"`
+	TxHash      string `json:"txHash,omitempty"`
+	StartedAt   string `json:"startedAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	CanRetry    bool   `json:"canRetry"`
+}
+
+// CashV9WalletAccount is the Wallet Account read model: one owner-facing
+// wallet — the cash boundary plus its linked external address — composed from
+// Arca's durable records with no chain call. WalletState is setup_required,
+// setting_up, ready, needs_attention or unavailable; Attention carries the
+// bounded reasons for the last two. Revision is the realm change-journal
+// sequence at composition (a stream resumes from it).
+type CashV9WalletAccount struct {
+	Schema         int                      `json:"schema"`
+	Revision       uint64                   `json:"revision"`
+	RealmID        string                   `json:"realmId"`
+	BoundaryID     string                   `json:"boundaryId"`
+	OwnerAddress   string                   `json:"ownerAddress"`
+	DepositAddress string                   `json:"depositAddress,omitempty"`
+	Source         *CashV9WalletSource      `json:"source"`
+	WalletState    string                   `json:"walletState"`
+	Attention      []string                 `json:"attention"`
+	Balances       CashV9WalletBalances     `json:"balances"`
+	AutoDeposit    *CashV9WalletAutoDeposit `json:"autoDeposit"`
+	Operations     []CashV9WalletOperation  `json:"operations"`
+}
+
+// GetCashV9WalletAccount reads the Wallet Account for one boundary. Requires
+// arca:ReadObject on the boundary's path — a realm-scoped device token is
+// enough — and returns *NotFoundError for an unknown boundary.
+func (a *Arca) GetCashV9WalletAccount(ctx context.Context, boundaryID string) (CashV9WalletAccount, error) {
+	return a.getCashV9WalletAccount(ctx, url.Values{"boundaryId": {boundaryID}})
+}
+
+// GetCashV9WalletAccountByOwner locates the boundary an owner address
+// controls and reads its Wallet Account; when the owner has several, the
+// active one is returned. Not found when the owner has none.
+func (a *Arca) GetCashV9WalletAccountByOwner(ctx context.Context, ownerAddress string) (CashV9WalletAccount, error) {
+	return a.getCashV9WalletAccount(ctx, url.Values{"ownerAddress": {ownerAddress}})
+}
+
+func (a *Arca) getCashV9WalletAccount(ctx context.Context, query url.Values) (CashV9WalletAccount, error) {
+	var out CashV9WalletAccount
+	rid, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	query.Set("realmId", rid)
+	err = a.client.get(ctx, "/custody/v9/cash/wallet-account", query, &out)
 	return out, err
 }
 func (a *Arca) ProposeCashV9BoundaryWithdrawal(ctx context.Context, requestID, boundaryID, amount, destination string) (CashV9Proposal, error) {
