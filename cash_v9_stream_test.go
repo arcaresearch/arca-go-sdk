@@ -135,6 +135,67 @@ func TestCashV9WalletAccountStream_RefusedConnectionIsTerminal(t *testing.T) {
 	}
 }
 
+// TestCashV9WalletAccountStream_IngressErrorIsADisconnect: a 503 before the
+// stream opens is the ingress mid-deploy, so Run retries it (and resumes from
+// the last revision) rather than stopping as it would on a refusal.
+func TestCashV9WalletAccountStream_IngressErrorIsADisconnect(t *testing.T) {
+	var mu sync.Mutex
+	connections := 0
+	var lastEventIDs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connections++
+		n := connections
+		lastEventIDs = append(lastEventIDs, r.Header.Get("Last-Event-ID"))
+		mu.Unlock()
+		switch n {
+		case 1, 2:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "upstream connect error")
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, walletAccountFrame(5, "ready"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	// Connection 1: the single-connection call reports the 503 as a
+	// disconnect that still carries the caller's resume revision.
+	err := a.StreamCashV9WalletAccount(context.Background(), "bnd_1", 7, func(CashV9WalletAccount) error { return nil })
+	var disc *CashV9WalletAccountStreamDisconnectedError
+	if !errors.As(err, &disc) || disc.LastRevision != 7 {
+		t.Fatalf("a 503 must be a disconnect carrying the resume revision, got %v", err)
+	}
+	// Connections 2 (503) and 3 (stream): Run retries through the ingress
+	// error after the 1 s step and delivers.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := time.Now()
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- a.RunCashV9WalletAccountStream(ctx, "bnd_1", func(CashV9WalletAccount) error { cancel(); return nil })
+	}()
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("run ended with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not recover from the ingress error")
+	}
+	if time.Since(started) < time.Second {
+		t.Fatal("run retried the 503 without backing off")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if connections != 3 || lastEventIDs[0] != "7" || lastEventIDs[1] != "" || lastEventIDs[2] != "" {
+		t.Fatalf("connections %d, Last-Event-IDs %q", connections, lastEventIDs)
+	}
+}
+
 func TestCashV9StreamBackoff(t *testing.T) {
 	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second}
 	for i, d := range want {

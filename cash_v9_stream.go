@@ -44,9 +44,11 @@ func (e *CashV9WalletAccountStreamDisconnectedError) Unwrap() error { return e.C
 // Heartbeat comments are consumed silently.
 //
 // Returns *CashV9WalletAccountStreamDisconnectedError when the connection
-// ends (EOF is a disconnect, never a completion), the accept error verbatim,
-// or the API error for a refused connection (*NotFoundError for an unknown
-// boundary, *ForbiddenError, a 429 when the per-key stream cap is reached).
+// ends (EOF is a disconnect, never a completion) or the ingress answers
+// 502/503/504 before the stream opens (a rolling deploy), the accept error
+// verbatim, or the API error for a refused connection (*NotFoundError for an
+// unknown boundary, *ForbiddenError, a 429 when the per-key stream cap is
+// reached).
 func (a *Arca) StreamCashV9WalletAccount(ctx context.Context, boundaryID string, lastRevision uint64, accept func(CashV9WalletAccount) error) error {
 	if accept == nil {
 		return fmt.Errorf("arca: wallet account stream callback required")
@@ -83,6 +85,11 @@ func (a *Arca) StreamCashV9WalletAccount(ctx context.Context, boundaryID string,
 		return &CashV9WalletAccountStreamDisconnectedError{LastRevision: lastRevision, Cause: err}
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= http.StatusBadGateway && response.StatusCode <= http.StatusGatewayTimeout {
+		// The ingress, not the API's answer (a rolling deploy): a disconnect
+		// to retry, never a refusal to stop on.
+		return &CashV9WalletAccountStreamDisconnectedError{LastRevision: lastRevision, Cause: fmt.Errorf("http %d before the stream opened", response.StatusCode)}
+	}
 	if response.StatusCode != http.StatusOK {
 		return a.client.unwrap(response, nil)
 	}
