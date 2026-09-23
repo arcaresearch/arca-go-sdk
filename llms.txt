@@ -292,9 +292,11 @@ calls. Money is micro-USDC integer STRINGS (parse with math/big). Every figure
 carries an AsOf {Block, Hash, Time}: Balances.AsOf is the realm's confirmed
 observation cursor, Source.AsOf the observer's complete-through checkpoint; they
 may differ — show the older one, never block on equality. Freshness is not a state:
-WalletState says whether the account is usable (unavailable = the durable
-projection disagrees with the journal; balances are still returned as last-known),
-not whether the data is recent. Operations lists every non-terminal operation plus
+WalletState says whether the account is usable (unavailable = the boundary
+record could not be interpreted, unknown_account_status; balances are returned as
+last-known), not whether the data is recent. An audit disagreement
+(ledger_disagreement, allocation_mismatch) is needs_attention with the durable
+balances served: show the figures; the reason is Arca's to fix, not the owner's. Operations lists every non-terminal operation plus
 30 days of terminal ones (≤200, newest first); ReservedMicro == PendingOutMicro by
 design (ledger hold vs the owner's "money leaving"). awaiting_approval (unsigned
 intent) and uncertain (lost reply) are states the PRODUCT layer adds from its own
