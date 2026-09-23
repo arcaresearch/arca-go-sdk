@@ -71,6 +71,9 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Create wallet | client.EnsureDenominatedArca(ctx, EnsureDenominatedArcaOptions{Ref}) |
 | Create any object | client.EnsureArca(ctx, EnsureArcaOptions{Ref, Type}) |
 | Create info object | client.EnsureInfo(ctx, EnsureInfoOptions{Ref, Labels}) |
+| Create a Privy provider object (any path; holds no balance, grants no authority) | client.EnsureProvider(ctx, EnsureProviderOptions{Ref}) |
+| Prove its Privy user and wallets | client.ConnectProvider(ctx, objectID, ConnectProviderOptions{Evidence: ProviderEvidence{Kind: ProviderEvidenceKindPrivyIdentityToken, IdentityToken}, Wallets}) → ProviderDetail; GetProvider; UpdateProviderWallet(ctx, objectID, walletID, UpdateProviderWalletOptions{Role, Controls}) |
+| Link a wallet (must be the Cash owner address) to a Cash account | client.CreateDepositLink(ctx, CreateDepositLinkOptions{RequestID, SourceObjectID, SourceWalletID, DestinationObjectID, Adapter}) → DepositLink{Requested, Observed (DepositRoute*; Unknown/Unwatched are never revoked), Operations, Progress}; GetDepositLink / ListDepositLinks(objectID) / RevokeDepositLink(id, requestID) (records the request only). Errors: DEPOSIT_LINK_OWNER_MISMATCH, DEPOSIT_LINK_SOURCE_CONFLICT |
 | Delete object | client.EnsureDeleted(ctx, EnsureDeletedOptions{Ref}) |
 | Get object | client.GetObject(ctx, path) / GetObjectDetail(ctx, id) |
 | List objects | client.ListObjects(ctx, *ListObjectsOptions) |

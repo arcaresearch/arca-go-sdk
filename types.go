@@ -83,6 +83,9 @@ const (
 	ObjectWithdrawal  ArcaObjectType = "withdrawal"
 	ObjectEscrow      ArcaObjectType = "escrow"
 	ObjectInfo        ArcaObjectType = "info"
+	// ObjectProvider is an external wallet-provider account (Privy); see
+	// EnsureProvider. It holds no balance.
+	ObjectProvider ArcaObjectType = "provider"
 )
 
 type ArcaObjectStatus string
@@ -236,6 +239,10 @@ type ArcaObjectDetailResponse struct {
 	Balances         []ArcaBalance         `json:"balances"`
 	ReservedBalances []ReservedBalance     `json:"reservedBalances,omitempty"`
 	Positions        []ArcaPositionCurrent `json:"positions,omitempty"`
+	// Provider is present on provider objects.
+	Provider *ProviderDetail `json:"provider,omitempty"`
+	// DepositLinks lists the links this object is either end of.
+	DepositLinks []DepositLink `json:"depositLinks,omitempty"`
 }
 
 type ReservedBalanceStatus string

@@ -224,6 +224,9 @@ type CashV9WalletAccount struct {
 	Balances       CashV9WalletBalances     `json:"balances"`
 	AutoDeposit    *CashV9WalletAutoDeposit `json:"autoDeposit"`
 	Operations     []CashV9WalletOperation  `json:"operations"`
+	// DepositLinks are the explicit deposit links into this boundary; with
+	// an active one, Source and AutoDeposit describe its source wallet.
+	DepositLinks []CashV9WalletDepositLink `json:"depositLinks,omitempty"`
 }
 
 // GetCashV9WalletAccount reads the Wallet Account for one boundary. Requires
