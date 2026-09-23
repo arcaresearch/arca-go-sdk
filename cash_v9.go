@@ -189,7 +189,8 @@ type CashV9WalletAutoDeposit struct {
 }
 
 // CashV9WalletOperation is one owner-started operation. Kind is create_cash,
-// send, deposit, receiver (allowance and policy later); State is sending,
+// send, deposit, receiver, auto_deposit_activate, auto_deposit_revoke or
+// source_send (allowance and policy later); State is sending,
 // confirming, completed or failed (awaiting_approval and uncertain are
 // product-layer states); Reason is set only when failed.
 type CashV9WalletOperation struct {
@@ -224,9 +225,26 @@ type CashV9WalletAccount struct {
 	Balances       CashV9WalletBalances     `json:"balances"`
 	AutoDeposit    *CashV9WalletAutoDeposit `json:"autoDeposit"`
 	Operations     []CashV9WalletOperation  `json:"operations"`
+	// Requirements are the action-proposal attempts awaiting the owner's
+	// answer, soonest deadline first. Empty from servers that predate them.
+	Requirements []CashV9WalletRequirement `json:"requirements"`
 	// DepositLinks are the explicit deposit links into this boundary; with
 	// an active one, Source and AutoDeposit describe its source wallet.
 	DepositLinks []CashV9WalletDepositLink `json:"depositLinks,omitempty"`
+}
+
+// CashV9WalletRequirement is one open action-proposal attempt on the
+// account. ExpiresAt is the signed deadline in unix seconds; past it the
+// attempt cannot be accepted. Read the proposal for its payload.
+type CashV9WalletRequirement struct {
+	ProposalID    string `json:"proposalId"`
+	RequirementID string `json:"requirementId"`
+	AttemptID     string `json:"attemptId"`
+	ActionKind    string `json:"actionKind"`
+	SchemaID      string `json:"schemaId"`
+	Variant       string `json:"variant"`
+	State         string `json:"state"`
+	ExpiresAt     int64  `json:"expiresAt"`
 }
 
 // GetCashV9WalletAccount reads the Wallet Account for one boundary. Requires

@@ -443,7 +443,13 @@ func mapAPIError(code, message, errorID string, details map[string]any) error {
 		// ORDER_FAILED = a refusal with no narrower code, verbatim venue
 		// text in Message. The specific code stays on base.Code.
 		"NO_LIQUIDITY", "MARKET_DELISTED", "MARKET_NOT_TRADABLE",
-		"MARKET_NOT_USDC_COLLATERAL", "VENUE_RATE_LIMITED", "ORDER_FAILED":
+		"MARKET_NOT_USDC_COLLATERAL", "VENUE_RATE_LIMITED", "ORDER_FAILED",
+		// Wallet action responses (409): the answer no longer applies.
+		// Details["limitation"] carries attempt_stale or consent_expired.
+		// ACTION_PROPOSAL_REQUIRED: a relay-executed proposal sent to a Cash
+		// submit route; answer it through its action proposal.
+		"ACTION_REQUEST_CONFLICT", "ACTION_ATTEMPT_STALE", "ACTION_PAYLOAD_MISMATCH",
+		"V9_PROPOSAL_CLOSED", "ACTION_PROPOSAL_REQUIRED":
 		return &ConflictError{base}
 	case "INTERNAL_ERROR":
 		return &InternalError{base}

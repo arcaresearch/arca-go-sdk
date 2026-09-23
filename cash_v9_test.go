@@ -15,6 +15,26 @@ import (
 // type round-trips it without losing or renaming a field. The fixtures are
 // the contract every client decoder is held to; a failure here means the SDK
 // type lags the wire shape.
+// The open action-proposal attempt a phone lists on the account: only the
+// awaiting one, with its deadline, never an answered or lapsed attempt.
+func TestCashV9WalletAccountRequirementFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "backend", "libs", "arca-go", "cashv9", "testdata", "wallet-account", "requirement-awaiting_approval.json"))
+	if err != nil {
+		t.Skipf("fixture not present: %v", err)
+	}
+	var account CashV9WalletAccount
+	if err := json.Unmarshal(raw, &account); err != nil {
+		t.Fatal(err)
+	}
+	if len(account.Requirements) != 1 {
+		t.Fatalf("requirements: %+v", account.Requirements)
+	}
+	r := account.Requirements[0]
+	if r.ProposalID == "" || r.RequirementID != "req_send" || r.AttemptID != "att_1" || r.ActionKind != "send" || r.SchemaID != "arca.kernel.v9.Move" || r.State != "awaiting_approval" || r.ExpiresAt == 0 {
+		t.Fatalf("requirement: %+v", r)
+	}
+}
+
 func TestCashV9WalletAccountDecodesFixtures(t *testing.T) {
 	dir := filepath.Join("..", "..", "backend", "libs", "arca-go", "cashv9", "testdata", "wallet-account")
 	entries, err := os.ReadDir(dir)

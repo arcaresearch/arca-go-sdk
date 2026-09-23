@@ -149,6 +149,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Observer health | client.GetAddressObservationHealth(ctx) — OwnerLeaseLive (the observer's latest checkpoint is fresh), OwnerHolder (the observer replica that published it), LastCheckpointAt, CompleteThroughBlock, ObservedHead, FinalityStatus, Fault, feed epoch, published vs unpublished sequence; no chain call |
 | Stream observation events with durable cursor | client.RunAddressObservationStream(ctx, after, func(AddressObservationBatch) error) — reconnects with jittered backoff from the last ACCEPTED cursor; StreamAddressObservations(ctx, after, accept) for one connection (returns *ObservationStreamDisconnectedError{LastCursor} on EOF) |
 | Keep one wallet's Wallet Account current (push, not poll) | client.RunCashV9WalletAccountStream(ctx, boundaryID, func(CashV9WalletAccount) error) — SSE of COMPLETE snapshots (on connect and after every boundary or source change; coalesced to ≤1 per 250 ms), automatic resume from the last Revision as Last-Event-ID, 1 s→30 s backoff; returns on ctx, a callback error, or a refused connection (*NotFoundError, *ForbiddenError, 429 per-key cap). StreamCashV9WalletAccount is the single connection (returns *CashV9WalletAccountStreamDisconnectedError with LastRevision) |
+| Request one wallet action and answer its signatures | client.ProposeWalletAction(ctx, WalletActionRequest) → WalletActionProposal{Requirements (sign TypedDataJSON), Operations, Limitations}; client.RespondWalletRequirement(ctx, proposalID, requirementID, WalletRequirementResponse{AttemptID, PayloadHash, Decision approve/decline, Signature, IdempotencyKey}); client.GetWalletActionProposal(ctx, id). Kinds set_up_account, send, enable_automatic_deposits (route + permit), revoke_automatic_deposits, source_send; accepted answers execute without the client |
 | One owner-facing wallet, rendered as-is | client.GetCashV9WalletAccount(ctx, boundaryID) / GetCashV9WalletAccountByOwner(ctx, ownerAddress) → CashV9WalletAccount — WalletState (setup_required · setting_up · ready · needs_attention · unavailable) + Attention reasons, Balances{ConfirmedMicro, AvailableMicro, ReservedMicro, PendingInMicro, PendingOutMicro, AsOf}, Source (linked external address: BalanceMicro nil when unknown, Health, its own AsOf), Operations[] (kind create_cash/send/deposit/receiver; state sending/confirming/completed/failed; Reason only when failed; CanRetry), Revision. Durable records only, no chain call; *NotFoundError for an unknown boundary/owner; arca:ReadObject is enough (a realm-scoped device token works) |
 
 ## Venue-to-venue hops
@@ -315,6 +316,52 @@ error, or a refused connection: *NotFoundError (unknown boundary),
 *ForbiddenError, or a 429 (code V9_WALLET_ACCOUNT_STREAMS_EXCEEDED) when one key
 holds more than the per-replica cap (16 by default) — shard keys per product
 backend rather than retrying. Do not hold a stream AND poll GetCashV9WalletAccount.
+
+Requirements lists the action-proposal attempts awaiting the owner's answer
+(CashV9WalletRequirement: ProposalID, RequirementID, AttemptID, ActionKind,
+SchemaID, Variant, ExpiresAt unix seconds), soonest deadline first. An answered,
+expired or admitted attempt is not listed; read the proposal for its payload.
+
+## Wallet action proposals (request one action, answer its requirements)
+
+A product requests ONE action for a wallet owner; Arca answers with the exact
+signatures it needs or the typed reasons it cannot. Supported kinds:
+set_up_account (CashPath + SourceAddress = owner), send (CashObjectID,
+AmountMicro, exactly one of Destination / DestinationCashObjectID), and the
+relay-executed enable_automatic_deposits, revoke_automatic_deposits and
+source_send (PrivyObjectID + SourceWalletID = a verified provider wallet at the
+Cash owner's address, CashObjectID; source_send adds AmountMicro + Destination;
+route actions may name DepositLinkID). An activation returns TWO requirements,
+req_route and req_permit, answered separately; its operation exists only once
+both are stored. A realm with no execution relay answers the relay-executed
+kinds with limitation unsupported_action.
+
+```go
+p, err := client.ProposeWalletAction(ctx, arca.WalletActionRequest{
+    RequestID: "send-7f3c", // your idempotency key: same request → same proposal
+    RequestedAction: arca.WalletRequestedAction{Kind: "send", CashObjectID: cashObjectID,
+        AmountMicro: "500000", Destination: "0x…"},
+})
+for _, r := range p.Requirements { // r.State "awaiting_approval": sign r.TypedDataJSON
+    // verify r.TypedDataJSON / r.Scope against your own policy, then have the owner sign
+    p, err = client.RespondWalletRequirement(ctx, p.ProposalID, r.ID, arca.WalletRequirementResponse{
+        AttemptID: r.AttemptID, PayloadHash: r.PayloadHash, Decision: "approve",
+        Signature: sig, IdempotencyKey: "approve-" + r.AttemptID})
+}
+// p.Limitations: account_not_set_up · deposit_permission_missing · deposit_permission_unknown ·
+// resource_conflict · unsupported_action · unsupported_schema_version · policy_capability_missing
+```
+
+Rules: a read (GetWalletActionProposal, the Wallet Account) never issues work. An
+attempt that expired unsigned is replaced only when you POST the identical request
+again (the old attempt reads expired with SupersededBy). Decline
+(Decision "decline", no signature) is durable. Answering anything but the open
+attempt returns ACTION_ATTEMPT_STALE (*ConflictError, Details["limitation"]
+"attempt_stale"); a signature after its deadline returns V9_CONSENT_EXPIRED. A
+lost reply: resend the SAME response — it returns the same operation. Once
+accepted, Arca executes without the client; follow Operations[] or the Wallet
+Account stream. Missing and unknown deposit permission are different facts —
+never render unknown as revoked. Contract: documents/contracts/v9-wallet-intents.md.
 
 ## Admin (realm-less builder client)
 
