@@ -465,12 +465,15 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 	workerDone := make(chan struct{})
 	defer func() { cancel(); <-workerDone }()
 	recover()
+	// Type routing, not a realm-root watch: the root watch assembled a
+	// full-realm snapshot and put every realm event on this socket.
+	operationEvents := []string{string(EventOperationCreated), string(EventOperationUpdated)}
 	go func() {
 		defer close(workerDone)
 		acquired := false
 		defer func() {
 			if acquired {
-				a.ws.unwatchPath("/")
+				a.ws.unsubscribeEvents(operationEvents)
 			}
 		}()
 		var completed uint64
@@ -485,26 +488,16 @@ func (a *Arca) waitForOperation(ctx context.Context, operationID string, timeout
 			}
 			covered := revision.Load()
 			for attempt := 0; attempt < 3; attempt++ {
-				ackCtx, ackCancel := context.WithTimeout(deadlineCtx, time.Second)
-				var ackErr error
-				var snapshot *WatchSnapshot
 				if !acquired {
 					acquired = true
-					snapshot, ackErr = a.ws.watchPath(ackCtx, "/")
-				} else {
-					snapshot, ackErr = a.ws.recoverPathReady(ackCtx, "/")
+					a.ws.subscribeEvents(operationEvents)
 				}
+				// Once the subscription is acknowledged every later
+				// operation event reaches this socket, so the read below
+				// covers the window the stream could not.
+				ackCtx, ackCancel := context.WithTimeout(deadlineCtx, time.Second)
+				ackErr := a.ws.confirmEventTypes(ackCtx, operationEvents)
 				ackCancel()
-				if ackErr == nil && snapshot != nil {
-					for _, operations := range [][]Operation{snapshot.Operations, snapshot.BufferedOperations} {
-						for _, operation := range operations {
-							tryResolve(&operation)
-							if settled.Load() {
-								return
-							}
-						}
-					}
-				}
 				if deadlineCtx.Err() != nil || settled.Load() {
 					return
 				}

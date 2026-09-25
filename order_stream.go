@@ -64,7 +64,7 @@ func (a *Arca) newOrderStream(ctx context.Context, objectID string) *orderStream
 	a.orderStreams[s] = struct{}{}
 	a.orderStreamsMu.Unlock()
 	s.onStop = func() { a.orderStreamsMu.Lock(); delete(a.orderStreams, s); a.orderStreamsMu.Unlock() }
-	for _, kind := range []string{EventOperationUpdated, EventOrderUpdated, EventFillPreviewed, EventFillRecorded} {
+	for _, kind := range orderStreamEvents {
 		s.off = append(s.off, ws.On(kind, s.receive))
 	}
 	go func() {
@@ -72,17 +72,23 @@ func (a *Arca) newOrderStream(ctx context.Context, objectID string) *orderStream
 			s.readyErr = err
 		} else {
 			s.watchStarted = true
-			_, s.readyErr = ws.watchPath(ctx, "/")
+			ws.subscribeEvents(orderStreamEvents)
+			s.readyErr = ws.confirmEventTypes(ctx, orderStreamEvents)
 		}
 
 		close(s.ready)
 		// A failed ACK is a transport gap, not the end of the order. Keep
-		// capture and its acquired path lease for acknowledged recovery.
+		// capture and its type subscription for acknowledged recovery.
 		<-ctx.Done()
 		s.stop()
 	}()
 	return s
 }
+
+// orderStreamEvents are the types an order stream captures, subscribed by
+// type: a realm-root watch would also assemble a full-realm snapshot and
+// put every realm event on the socket for each order in flight.
+var orderStreamEvents = []string{EventOperationUpdated, EventOrderUpdated, EventFillPreviewed, EventFillRecorded}
 
 func (s *orderStream) stop() {
 	s.stopOnce.Do(func() {
@@ -96,12 +102,12 @@ func (s *orderStream) stop() {
 		for _, off := range s.off {
 			off()
 		}
-		// watchPath has acquired its reference before ready closes. Wait before
-		// release so cancellation cannot race with and leak the path reference.
+		// The subscription is taken before ready closes. Wait before release
+		// so cancellation cannot race with and leak the type reference.
 		go func() {
 			<-s.ready
 			if s.watchStarted {
-				s.ws.unwatchPath("/")
+				s.ws.unsubscribeEvents(orderStreamEvents)
 			}
 		}()
 	})

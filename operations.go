@@ -222,12 +222,15 @@ func (a *Arca) WaitForQuiescence(ctx context.Context, pollInterval time.Duration
 	}
 	offGap := a.ws.OnGap(func(int64) { recoverOnce() })
 	defer offGap()
-	a.ws.EnsureConnected()
-	if _, err := a.ws.watchPath(ctx, "/"); err != nil {
-		a.ws.unwatchPath("/")
+	// Operation events by type, acknowledged before the seed read so nothing
+	// published in between is missed. A realm-root watch would also have
+	// assembled a full-realm snapshot and put every realm event on the socket.
+	operationEvents := []string{string(EventOperationCreated), string(EventOperationUpdated)}
+	a.ws.subscribeEvents(operationEvents)
+	defer a.ws.unsubscribeEvents(operationEvents)
+	if err := a.ws.confirmEventTypes(ctx, operationEvents); err != nil {
 		return err
 	}
-	defer a.ws.unwatchPath("/")
 	offAuth := a.ws.OnAuthenticated(recoverOnce)
 	defer offAuth()
 	states := map[string]Operation{}

@@ -203,7 +203,7 @@ func TestCaptureSurvivesFailedACKAndRecoveredOpenSnapshot(t *testing.T) {
 	go func() { _, err := h.ExecutionReceipt(ctx); done <- err }()
 	first := server.accept()
 	first.handshake(0)
-	first.waitFor("watch")
+	first.waitFor("subscribe_events")
 	first.close()
 	<-stream.ready
 	stream.mu.Lock()
@@ -218,8 +218,11 @@ acknowledge:
 	for {
 		select {
 		case message := <-second.in:
-			if message["action"] == "watch" && message["requestId"] != nil {
-				second.send(map[string]any{"type": "watch_snapshot", "requestId": message["requestId"]})
+			if message["action"] == "watch" {
+				t.Fatal("order capture watched a path; it subscribes to its event types")
+			}
+			if message["action"] == "subscribe_events" && message["requestId"] != nil {
+				second.send(map[string]any{"type": "events_subscribed", "requestId": message["requestId"], "types": message["types"]})
 			}
 		case <-seeded:
 			break acknowledge

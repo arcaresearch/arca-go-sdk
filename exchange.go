@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -198,6 +199,14 @@ func (a *Arca) GetLeverage(ctx context.Context, objectID, coin string) (Leverage
 	return out, err
 }
 
+// Order handles subscribe to the event types they consume. A realm-root
+// watch would also assemble a full-realm snapshot and put every realm event
+// on the socket for the life of each handle.
+var (
+	orderExecutionEvents = []string{string(EventOperationUpdated), string(EventOrderUpdated)}
+	orderFillEvents      = []string{string(EventFillPreviewed), string(EventFillRecorded)}
+)
+
 func (a *Arca) orderHandleDeps() orderHandleDeps {
 	return orderHandleDeps{
 		onExecutionGap: func(handler func()) func() {
@@ -206,28 +215,30 @@ func (a *Arca) orderHandleDeps() orderHandleDeps {
 			return func() { gap(); auth() }
 		},
 		recoverExecutionReady: func(ctx context.Context) error {
-			_, err := a.ws.watchPath(ctx, "/")
-			a.ws.unwatchPath("/")
-			return err
+			a.ws.subscribeEvents(orderExecutionEvents)
+			defer a.ws.unsubscribeEvents(orderExecutionEvents)
+			return a.ws.confirmEventTypes(ctx, orderExecutionEvents)
 		},
 		onExecutionEvent: func(handler func(RealmEvent)) func() {
-			a.ws.EnsureConnected()
-			ctx, cancel := context.WithCancel(context.Background())
 			operation := a.ws.On(EventOperationUpdated, handler)
 			order := a.ws.On(EventOrderUpdated, handler)
-			go func() { _, _ = a.ws.watchPath(ctx, "/") }()
-			return func() { operation(); order(); cancel(); a.ws.unwatchPath("/") }
+			a.ws.subscribeEvents(orderExecutionEvents)
+			var once sync.Once
+			return func() {
+				once.Do(func() { operation(); order(); a.ws.unsubscribeEvents(orderExecutionEvents) })
+			}
 		},
 		getOrder: func(ctx context.Context, objectID, orderID string) (SimOrderWithFills, error) {
 			return a.GetOrder(ctx, objectID, orderID)
 		},
 		onFillEvent: func(handler func(RealmEvent)) func() {
-			ctx, cancel := context.WithCancel(context.Background())
 			preview := a.ws.On(EventFillPreviewed, handler)
 			recorded := a.ws.On(EventFillRecorded, handler)
-			ready := make(chan struct{})
-			go func() { defer close(ready); _, _ = a.ws.watchPath(ctx, "/") }()
-			return func() { cancel(); preview(); recorded(); go func() { <-ready; a.ws.unwatchPath("/") }() }
+			a.ws.subscribeEvents(orderFillEvents)
+			var once sync.Once
+			return func() {
+				once.Do(func() { preview(); recorded(); a.ws.unsubscribeEvents(orderFillEvents) })
+			}
 		},
 		cancelOrder: func(ctx context.Context, opts CancelOrderOptions) *OperationHandle[OrderOperationResponse] {
 			return a.CancelOrder(ctx, opts)

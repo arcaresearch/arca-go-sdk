@@ -128,11 +128,12 @@ type WebSocketManager struct {
 	// re-attached on every reconnect or the watch goes silent.
 	attachedWatches map[string]struct{}
 
-	// eventTypeSubs holds realm event types subscribed by TYPE rather than
-	// by path, so a consumer of one event class does not have to watch "/"
-	// (which drags a full-realm snapshot and a realm-wide valuation watch
-	// behind it). Re-issued on every reconnect.
-	eventTypeSubs map[string]struct{}
+	// eventTypeSubs counts the owners of each realm event type subscribed
+	// by TYPE rather than by path, so a consumer of one event class does not
+	// have to watch "/" (which drags a full-realm snapshot and a realm-wide
+	// valuation watch behind it). Counted so one owner's release cannot
+	// unsubscribe a type another still needs. Re-issued on every reconnect.
+	eventTypeSubs map[string]int
 
 	pending   map[string]pendingRequest
 	nextReqID int
@@ -496,6 +497,11 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 		}
 		_ = json.Unmarshal(data, &e)
 		m.emitError(&ArcaError{Code: "WS_ERROR", Message: e.Message})
+		return
+	case "events_subscribed":
+		if head.RequestID != "" {
+			m.resolvePending(head.RequestID, data)
+		}
 		return
 	case "aggregation_watch_created", "chart_snapshot_watch_created", "watch_snapshot":
 		if head.RequestID != "" {
@@ -1713,36 +1719,114 @@ func (m *WebSocketManager) detachAggregationWatch(watchID string) {
 	m.send(map[string]any{"action": "detach_aggregation_watch", "watchId": watchID})
 }
 
-// subscribeEvents asks for realm events by TYPE, with no path watch. The
-// server still applies the per-event scope backstop, so this widens which
-// events arrive, never whose.
+// subscribeEvents takes a reference on realm events by TYPE, with no path
+// watch. The server still applies the per-event scope backstop, so this
+// widens which events arrive, never whose. Pair with unsubscribeEvents.
 func (m *WebSocketManager) subscribeEvents(types []string) {
 	if len(types) == 0 {
 		return
 	}
+	var added []string
 	m.mu.Lock()
 	if m.eventTypeSubs == nil {
-		m.eventTypeSubs = map[string]struct{}{}
+		m.eventTypeSubs = map[string]int{}
 	}
 	for _, t := range types {
-		m.eventTypeSubs[t] = struct{}{}
+		if m.eventTypeSubs[t] == 0 {
+			added = append(added, t)
+		}
+		m.eventTypeSubs[t]++
 	}
 	m.mu.Unlock()
 	m.EnsureConnected()
-	m.sendWhenConnected(map[string]any{"action": "subscribe_events", "types": types})
+	if len(added) > 0 {
+		m.sendWhenConnected(map[string]any{"action": "subscribe_events", "types": added})
+	}
 }
 
-// unsubscribeEvents drops type-routed delivery for the given types.
+// unsubscribeEvents releases a reference taken by subscribeEvents; a type
+// is unsubscribed when its last owner releases it.
 func (m *WebSocketManager) unsubscribeEvents(types []string) {
-	if len(types) == 0 {
-		return
-	}
+	var dropped []string
 	m.mu.Lock()
 	for _, t := range types {
-		delete(m.eventTypeSubs, t)
+		switch n := m.eventTypeSubs[t]; {
+		case n > 1:
+			m.eventTypeSubs[t] = n - 1
+		case n == 1:
+			delete(m.eventTypeSubs, t)
+			dropped = append(dropped, t)
+		}
 	}
 	m.mu.Unlock()
-	m.send(map[string]any{"action": "unsubscribe_events", "types": types})
+	if len(dropped) > 0 {
+		m.send(map[string]any{"action": "unsubscribe_events", "types": dropped})
+	}
+}
+
+// confirmEventTypes is the barrier for owned event types: it re-sends the
+// subscription on the current socket and returns once the server
+// acknowledges it. Anything published afterwards reaches this socket, so a
+// read taken after it returns closes the window the live subscription could
+// not see — the type-routed counterpart of recoverPathReady.
+func (m *WebSocketManager) confirmEventTypes(ctx context.Context, types []string) error {
+	m.mu.Lock()
+	for _, t := range types {
+		if m.eventTypeSubs[t] == 0 {
+			m.mu.Unlock()
+			return &ArcaError{Code: "EVENTS_NOT_OWNED", Message: "confirmation requires owned event types"}
+		}
+	}
+	m.mu.Unlock()
+	reqID := "events-" + m.newRequestID()
+	ch := m.registerPending(reqID)
+	var sendMu sync.Mutex
+	active := true
+	send := func() {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		if active && ctx.Err() == nil {
+			m.send(map[string]any{"action": "subscribe_events", "types": types, "requestId": reqID})
+		}
+	}
+	cancelDeferred := m.onAuthenticatedOnce(send)
+	defer func() {
+		sendMu.Lock()
+		active = false
+		sendMu.Unlock()
+		cancelDeferred()
+		m.mu.Lock()
+		delete(m.pending, reqID)
+		m.mu.Unlock()
+	}()
+	m.mu.Lock()
+	connected := m.status == StatusConnected
+	m.mu.Unlock()
+	if connected {
+		cancelDeferred()
+		send()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case raw, ok := <-ch:
+		if !ok {
+			return &ArcaError{Code: "WS_DISCONNECTED", Message: "websocket disconnected"}
+		}
+		var response struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &response); err != nil {
+			return err
+		}
+		if response.Type == "error" {
+			return &ArcaError{Code: "WS_ERROR", Message: response.Message}
+		}
+		return nil
+	case <-time.After(wsRequestTimeout):
+		return &ArcaError{Code: "WS_TIMEOUT", Message: "timeout waiting for events_subscribed"}
+	}
 }
 
 func (m *WebSocketManager) createChartHistoryWatch(ctx context.Context, target, kind, objectID string) (string, error) {
