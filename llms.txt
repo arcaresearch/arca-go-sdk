@@ -204,6 +204,11 @@ idempotently keyed on Fill.ID (duplicates possible, loss never). Empty
 FromCursor starts from now (no history). Delivery starts on first
 OnUpdate/Updates/Ready attach.
 
+WaitForOperation, WaitForQuiescence and order handles also subscribe by
+TYPE (operation.*, order.updated, fill.*) and treat the server's
+events_subscribed acknowledgement as the barrier before a recovery read;
+none of them watches "/".
+
 WatchRealmExchange is the realm-wide live-tail of exchange.updated — the
 no-fill mutations (funding, deposit/withdraw, isolated margin, leverage,
 margin-mode) that fill.recorded does not cover. Same wire as
