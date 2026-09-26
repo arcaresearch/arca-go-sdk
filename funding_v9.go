@@ -87,7 +87,12 @@ type FundingV9Operation struct {
 	Settlement          *FundingV9CoreSettlement      `json:"settlement,omitempty"`
 	TxHash              string                        `json:"txHash,omitempty"`
 	Error               string                        `json:"error,omitempty"`
-	CreatedAt           string                        `json:"createdAt"`
+	// Attention is the typed reason an operation stopped at stage
+	// needs_attention: value may be in transit, so nothing is released.
+	Attention string `json:"attention,omitempty"`
+	CreatedAt string `json:"createdAt"`
+	// Move is set on a trading-account move; Kind is its route.
+	Move *FundingV9MoveState `json:"move,omitempty"`
 }
 type FundingV9CoreSnapshot struct {
 	ObservedAt          int64  `json:"observedAt,omitempty"`
@@ -115,6 +120,8 @@ type FundingV9CoreSettlement struct {
 	CreditRaw       string                `json:"creditRaw"`
 	Final           bool                  `json:"final"`
 	Snapshot        FundingV9CoreSnapshot `json:"snapshot"`
+	// DebitAccount is the HyperCore account a move's native action debited.
+	DebitAccount string `json:"debitAccount,omitempty"`
 }
 type FundingV9SetupRequest struct {
 	RealmID      string `json:"realmId"`
@@ -297,4 +304,158 @@ func (a *Arca) StreamFundingV9Operation(ctx context.Context, id string, accept f
 		return err
 	}
 	return io.ErrUnexpectedEOF
+}
+
+// FundingV9MoveSetup names a destination trading account that does not exist
+// yet; the move waits for its owner-signed creation.
+type FundingV9MoveSetup struct {
+	ArcaPath     string `json:"arcaPath"`
+	OwnerAddress string `json:"ownerAddress"`
+}
+
+// FundingV9MoveQuoteRequest amounts are integer raw USDC strings (6
+// decimals). An empty AmountRaw returns the bounds only.
+type FundingV9MoveQuoteRequest struct {
+	RealmID    string              `json:"realmId"`
+	FromArcaID string              `json:"fromArcaId"`
+	ToArcaID   string              `json:"toArcaId,omitempty"`
+	Setup      *FundingV9MoveSetup `json:"setup,omitempty"`
+	AmountRaw  string              `json:"amountRaw,omitempty"`
+}
+
+type FundingV9MoveSide struct {
+	Kind           string `json:"kind"`
+	ArcaID         string `json:"arcaId"`
+	ArcaPath       string `json:"arcaPath"`
+	BoundaryID     string `json:"boundaryId"`
+	AccountAddress string `json:"accountAddress"`
+}
+
+type FundingV9MoveRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// FundingV9MoveQuote is an exact quote in raw units. ArrivesRaw always equals
+// AmountRaw: fees are charged to the source on top. MinimumRaw and MaxRaw are
+// inclusive. Refusal is set for an amount below the minimum or above the max.
+type FundingV9MoveQuote struct {
+	Route               string                `json:"route"`
+	From                FundingV9MoveSide     `json:"from"`
+	To                  FundingV9MoveSide     `json:"to"`
+	AmountRaw           string                `json:"amountRaw"`
+	ActivationFeeRaw    string                `json:"activationFeeRaw"`
+	NetworkFeeRaw       string                `json:"networkFeeRaw"`
+	ArrivesRaw          string                `json:"arrivesRaw"`
+	DebitRaw            string                `json:"debitRaw"`
+	MinimumRaw          string                `json:"minimumRaw"`
+	MaxRaw              string                `json:"maxRaw"`
+	FromActivation      string                `json:"fromActivation"`
+	ToActivation        string                `json:"toActivation"`
+	FromActivationAfter string                `json:"fromActivationAfter"`
+	ToActivationAfter   string                `json:"toActivationAfter"`
+	RequiresSetup       bool                  `json:"requiresSetup"`
+	ExpiresAt           int64                 `json:"expiresAt"`
+	Refusal             *FundingV9MoveRefusal `json:"refusal,omitempty"`
+}
+
+// FundingV9MoveRequest admits a move from a reviewed quote: repeat its terms
+// exactly. RequestID makes the create idempotent; SetupDeadline (unix
+// seconds, at most five minutes ahead) is required with Setup.
+type FundingV9MoveRequest struct {
+	RealmID          string              `json:"realmId"`
+	RequestID        string              `json:"requestId"`
+	FromArcaID       string              `json:"fromArcaId"`
+	ToArcaID         string              `json:"toArcaId,omitempty"`
+	Setup            *FundingV9MoveSetup `json:"setup,omitempty"`
+	AmountRaw        string              `json:"amountRaw"`
+	ActivationFeeRaw string              `json:"activationFeeRaw"`
+	NetworkFeeRaw    string              `json:"networkFeeRaw"`
+	FromActivation   string              `json:"fromActivation"`
+	ToActivation     string              `json:"toActivation"`
+	QuoteExpiresAt   int64               `json:"quoteExpiresAt"`
+	SetupDeadline    int64               `json:"setupDeadline,omitempty"`
+}
+
+// FundingV9MoveRequestFromQuote copies a quote's reviewed terms into a create.
+func FundingV9MoveRequestFromQuote(requestID string, q FundingV9MoveQuote) FundingV9MoveRequest {
+	r := FundingV9MoveRequest{RequestID: requestID, FromArcaID: q.From.ArcaID, AmountRaw: q.AmountRaw, ActivationFeeRaw: q.ActivationFeeRaw, NetworkFeeRaw: q.NetworkFeeRaw, FromActivation: q.FromActivation, ToActivation: q.ToActivation, QuoteExpiresAt: q.ExpiresAt}
+	if !q.RequiresSetup {
+		r.ToArcaID = q.To.ArcaID
+	}
+	return r
+}
+
+type FundingV9MoveStep struct {
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	TxHash      string `json:"txHash,omitempty"`
+	BlockNumber uint64 `json:"blockNumber,omitempty"`
+	BlockHash   string `json:"blockHash,omitempty"`
+}
+
+type FundingV9MoveState struct {
+	Route               string              `json:"route"`
+	From                FundingV9Account    `json:"from"`
+	To                  FundingV9Account    `json:"to"`
+	AmountRaw           string              `json:"amountRaw"`
+	ActivationFeeRaw    string              `json:"activationFeeRaw"`
+	NetworkFeeRaw       string              `json:"networkFeeRaw"`
+	DebitRaw            string              `json:"debitRaw"`
+	FromActivation      string              `json:"fromActivation"`
+	ToActivation        string              `json:"toActivation"`
+	FromActivationAfter string              `json:"fromActivationAfter"`
+	ToActivationAfter   string              `json:"toActivationAfter"`
+	Ref                 string              `json:"ref"`
+	Steps               []FundingV9MoveStep `json:"steps"`
+	DebitBooked         bool                `json:"debitBooked"`
+	CreditBooked        bool                `json:"creditBooked"`
+	SetupOperationID    string              `json:"setupOperationId,omitempty"`
+	SetupDeadline       int64               `json:"setupDeadline,omitempty"`
+}
+
+// FundingV9MoveAdmission is a move and, when its destination needs setup,
+// the owner-signed creation it waits for (sign and submit it with
+// SubmitFundingV9Account before SetupDeadline).
+type FundingV9MoveAdmission struct {
+	Operation FundingV9Operation `json:"operation"`
+	Setup     *FundingV9Proposal `json:"setup,omitempty"`
+}
+
+// QuoteFundingV9Move prices a move between Cash and the owner's own trading
+// accounts, or between two trading accounts. The realm must enable moves.
+func (a *Arca) QuoteFundingV9Move(ctx context.Context, r FundingV9MoveQuoteRequest) (FundingV9MoveQuote, error) {
+	var out FundingV9MoveQuote
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	r.RealmID = realm
+	err = a.client.post(ctx, "/custody/v9/funding/moves/quote", r, &out)
+	return out, err
+}
+
+// CreateFundingV9Move admits a move. It needs no signature: the operator
+// executes it under SameOwner. Retry with the same RequestID after a lost
+// reply; a changed quote is refused with V9_MOVE_QUOTE_CHANGED.
+func (a *Arca) CreateFundingV9Move(ctx context.Context, r FundingV9MoveRequest) (FundingV9MoveAdmission, error) {
+	var out FundingV9MoveAdmission
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	r.RealmID = realm
+	err = a.client.post(ctx, "/custody/v9/funding/moves", r, &out)
+	return out, err
+}
+
+// GetFundingV9Move reads a move. StreamFundingV9Operation follows it by id.
+func (a *Arca) GetFundingV9Move(ctx context.Context, id string) (FundingV9MoveAdmission, error) {
+	var out FundingV9MoveAdmission
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.get(ctx, "/custody/v9/funding/moves/"+url.PathEscape(id), url.Values{"realmId": {realm}}, &out)
+	return out, err
 }
