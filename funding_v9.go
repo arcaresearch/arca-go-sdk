@@ -95,6 +95,11 @@ type FundingV9Operation struct {
 	Move *FundingV9MoveState `json:"move,omitempty"`
 }
 type FundingV9CoreSnapshot struct {
+	// BeforeEVM identifies native state before that EVM block executes.
+	BeforeEVM bool   `json:"beforeEvm,omitempty"`
+	EVMBlock  uint64 `json:"evmBlock,omitempty"`
+	// SpotBalance is owned spot USDC, separate from Balance (perp equity).
+	SpotBalance         string `json:"spotBalance,omitempty"`
 	ObservedAt          int64  `json:"observedAt,omitempty"`
 	Source              string `json:"source,omitempty"`
 	Account             string `json:"account"`
@@ -106,6 +111,10 @@ type FundingV9CoreSnapshot struct {
 	WithdrawableBalance string `json:"withdrawableBalance"`
 }
 type FundingV9CoreSettlement struct {
+	ActionKind      string                `json:"actionKind,omitempty"`
+	SourceDex       uint32                `json:"sourceDex,omitempty"`
+	ToPerp          *bool                 `json:"toPerp,omitempty"`
+	Refusal         *FundingV9CoreRefusal `json:"refusal,omitempty"`
 	Sequence        uint64                `json:"sequence"`
 	ChainID         string                `json:"chainId"`
 	SourceTxHash    string                `json:"sourceTxHash"`
@@ -123,6 +132,13 @@ type FundingV9CoreSettlement struct {
 	// DebitAccount is the HyperCore account a move's native action debited.
 	DebitAccount string `json:"debitAccount,omitempty"`
 }
+type FundingV9CoreRefusal struct {
+	Reason         string `json:"reason"`
+	Detail         string `json:"detail"`
+	DemandRevision string `json:"demandRevision,omitempty"`
+	ExpectedNonce  string `json:"expectedNonce,omitempty"`
+}
+
 type FundingV9SetupRequest struct {
 	RealmID      string `json:"realmId"`
 	RequestID    string `json:"requestId"`
@@ -336,9 +352,10 @@ type FundingV9MoveRefusal struct {
 	Message string `json:"message"`
 }
 
-// FundingV9MoveQuote is an exact quote in raw units. ArrivesRaw always equals
-// AmountRaw: fees are charged to the source on top. MinimumRaw and MaxRaw are
-// inclusive. Refusal is set for an amount below the minimum or above the max.
+// FundingV9MoveQuote binds raw-unit amounts. ArrivesRaw equals AmountRaw;
+// activation is charged on top. NetworkFeeRaw is an upper allowance, included
+// in DebitRaw; actual charges appear on the settled move. MinimumRaw/MaxRaw
+// are inclusive. Refusal explains an invalid amount without admitting it.
 type FundingV9MoveQuote struct {
 	Route               string                `json:"route"`
 	From                FundingV9MoveSide     `json:"from"`
@@ -395,6 +412,10 @@ type FundingV9MoveStep struct {
 }
 
 type FundingV9MoveState struct {
+	// Actual amounts are absent before the correlated return debit is booked.
+	// NetworkFeeRaw and DebitRaw remain the immutable quote's upper bounds.
+	ActualDebitRaw      string              `json:"actualDebitRaw,omitempty"`
+	ActualNetworkFeeRaw string              `json:"actualNetworkFeeRaw,omitempty"`
 	Route               string              `json:"route"`
 	From                FundingV9Account    `json:"from"`
 	To                  FundingV9Account    `json:"to"`
@@ -457,5 +478,45 @@ func (a *Arca) GetFundingV9Move(ctx context.Context, id string) (FundingV9MoveAd
 		return out, err
 	}
 	err = a.client.get(ctx, "/custody/v9/funding/moves/"+url.PathEscape(id), url.Values{"realmId": {realm}}, &out)
+	return out, err
+}
+
+// FundingV9WalletWatermark binds the Cash journal cut and one native batch.
+type FundingV9WalletWatermark struct {
+	CashRevision        uint64 `json:"cashRevision"`
+	CashBlock           uint64 `json:"cashBlock"`
+	NativeBlock         uint64 `json:"nativeBlock"`
+	NativeBlockHash     string `json:"nativeBlockHash"`
+	EVMBlock            uint64 `json:"evmBlock"`
+	SettlementSequence  uint64 `json:"settlementSequence"`
+	LastSettlementBlock uint64 `json:"lastSettlementBlock"`
+}
+
+// FundingV9WalletSnapshot is the complete quiescent wallet monetary envelope.
+// Replace it as a whole. During unresolved movement the server refuses a new
+// envelope; retain the last complete one and mark it not current. Never merge
+// separate account reads or invent zero components after an unavailable read.
+type FundingV9WalletSnapshot struct {
+	Schema       int                      `json:"schema"`
+	RealmID      string                   `json:"realmId"`
+	OwnerAddress string                   `json:"ownerAddress"`
+	ArcaPath     string                   `json:"arcaPath"`
+	Cash         CashV9WalletAccount      `json:"cash"`
+	Accounts     []FundingV9Account       `json:"accounts"`
+	MovingMicro  string                   `json:"movingMicro"`
+	Watermark    FundingV9WalletWatermark `json:"watermark"`
+}
+
+// GetFundingV9WalletSnapshot reads Cash and every owned trading account under
+// arcaPath in a single complete envelope. Requires arca:ReadObject for both
+// the wallet root and Cash path. Refetch on durable change notifications;
+// this method is a one-shot read, not a polling subscription.
+func (a *Arca) GetFundingV9WalletSnapshot(ctx context.Context, ownerAddress, arcaPath, boundaryID string) (FundingV9WalletSnapshot, error) {
+	var out FundingV9WalletSnapshot
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.get(ctx, "/custody/v9/funding/wallet-snapshot", url.Values{"realmId": {realm}, "ownerAddress": {ownerAddress}, "arcaPath": {arcaPath}, "boundaryId": {boundaryID}}, &out)
 	return out, err
 }
