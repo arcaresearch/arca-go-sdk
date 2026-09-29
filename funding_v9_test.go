@@ -205,3 +205,28 @@ func assertFundingWirePreserved(t *testing.T, raw []byte, value any) {
 	}
 	check("wire", want, got)
 }
+
+func TestFundingRecheckWire(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/custody/v9/funding/operations/op%2F1/recheck" && r.URL.Path != "/api/v1/custody/v9/funding/operations/op/1/recheck" {
+			t.Error("unexpected endpoint", r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		var req map[string]string
+		json.NewDecoder(r.Body).Decode(&req)
+		if r.Method != http.MethodPost || req["realmId"] != "realm" {
+			t.Error("recheck request changed", r.Method, req)
+		}
+		calls++
+		w.WriteHeader(202)
+		fmt.Fprint(w, `{"success":true,"data":{"operationId":"op/1","demandKey":"funding-correlation-demand/999.src.0xab.2","revision":"2","reason":"native_missing"}}`)
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	out, err := a.RecheckFundingV9Operation(context.Background(), "op/1")
+	if err != nil || out.Revision != "2" || out.Reason != "native_missing" || out.OperationID != "op/1" || calls != 1 {
+		t.Fatal(out, err, calls)
+	}
+}

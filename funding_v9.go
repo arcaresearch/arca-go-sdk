@@ -252,6 +252,31 @@ func (a *Arca) RetireFundingV9Proposal(ctx context.Context, id string) (FundingV
 	return out, err
 }
 
+// FundingV9Recheck is the answer to a native-refusal recheck: the demand
+// revision the correlation source will answer next and the reason rechecked.
+type FundingV9Recheck struct {
+	OperationID string `json:"operationId"`
+	DemandKey   string `json:"demandKey"`
+	Revision    string `json:"revision"`
+	Reason      string `json:"reason"`
+}
+
+// RecheckFundingV9Operation re-asks the native correlation source to
+// attribute the source of a deposit or move stopped at `needs_attention` by a
+// native refusal. Nothing is booked or released: a new correlation supersedes
+// the refusal and the operation resumes; a repeated refusal leaves it stopped.
+// Attention raised by Arca's own comparisons is not recheckable (409
+// V9_OPERATION_NOT_RECHECKABLE).
+func (a *Arca) RecheckFundingV9Operation(ctx context.Context, id string) (FundingV9Recheck, error) {
+	var out FundingV9Recheck
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.post(ctx, "/custody/v9/funding/operations/"+url.PathEscape(id)+"/recheck", map[string]string{"realmId": realm}, &out)
+	return out, err
+}
+
 // StreamFundingV9Operation consumes authoritative full snapshots with bounded
 // buffering. Reconnect by calling again with the same operation ID; the initial
 // snapshot recovers missed progress. Cancellation closes the HTTP request. A
