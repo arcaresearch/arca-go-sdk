@@ -65,6 +65,41 @@ func TestFundingBundleAndSnapshotRecovery(t *testing.T) {
 	}
 }
 
+func TestFundingV9DeclareAndUpdateAccount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/custody/v9/funding/accounts/declare":
+			var req FundingV9DeclareRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.RealmID != "realm" || req.RequestID != "declare-1" || req.Kind != "hyperliquid" || req.BoundaryID != "cash-b" {
+				t.Error("declaration changed", req)
+			}
+			fmt.Fprint(w, `{"success":true,"data":{"arcaId":"obj_t","arcaPath":"/u/trading/1","walletBoundaryId":"cash-b","kind":"hyperliquid","ownerAddress":"0x01","labels":{"name":"Hyperliquid 1","ordinal":"1","venue":"hyperliquid"},"setupStatus":"declared","lifecycle":"active","revision":1}}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/custody/v9/funding/accounts/obj_t":
+			var p FundingV9AccountPatch
+			json.NewDecoder(r.Body).Decode(&p)
+			if p.RealmID != "realm" || p.Revision != 1 || p.Labels["name"] != "Scalps" {
+				t.Error("patch changed", p)
+			}
+			fmt.Fprint(w, `{"success":true,"data":{"arcaId":"obj_t","arcaPath":"/u/trading/1","walletBoundaryId":"cash-b","kind":"hyperliquid","ownerAddress":"0x01","labels":{"name":"Scalps","ordinal":"1","venue":"hyperliquid"},"setupStatus":"declared","lifecycle":"active","revision":2}}`)
+		default:
+			t.Error("unexpected endpoint", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	ctx := context.Background()
+	d, err := a.DeclareFundingV9Account(ctx, FundingV9DeclareRequest{RequestID: "declare-1", OwnerAddress: "0x01", BoundaryID: "cash-b", Kind: "hyperliquid"})
+	if err != nil || d.SetupStatus != "declared" || d.Labels["name"] != "Hyperliquid 1" || d.Revision != 1 {
+		t.Fatal(d, err)
+	}
+	u, err := a.UpdateFundingV9Account(ctx, d.ArcaID, FundingV9AccountPatch{Revision: d.Revision, Labels: map[string]string{"name": "Scalps"}})
+	if err != nil || u.Labels["name"] != "Scalps" || u.Revision != 2 {
+		t.Fatal(u, err)
+	}
+}
+
 func TestFundingMoveQuoteCreateAndRead(t *testing.T) {
 	creates := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +150,7 @@ func TestFundingMoveQuoteCreateAndRead(t *testing.T) {
 }
 
 func TestFundingV9WalletSnapshotAndObservedReturnWire(t *testing.T) {
-	const wallet = `{"schema":1,"realmId":"realm","ownerAddress":"0xowner","arcaPath":"/users/alice & one","cash":{"schema":1,"revision":17,"boundaryId":"cash-boundary","ownerAddress":"0xowner","walletState":"ready","balances":{"availableMicro":"1990000","confirmedMicro":"1990000"}},"accounts":[{"arcaId":"trade","observation":{"account":"0xtrade","source":"hyperevm_precompiles","observedAt":1234,"coreBlock":201,"coreBlockHash":"native-hash","beforeEvm":true,"evmBlock":101,"balance":"0.008159","spotBalance":"0.01000001","availableBalance":"0.008159","withdrawableBalance":"0.008159"}}],"movingMicro":"0","watermark":{"cashRevision":17,"cashBlock":100,"nativeBlock":201,"nativeBlockHash":"native-hash","evmBlock":101,"settlementSequence":2,"lastSettlementBlock":200}}`
+	const wallet = `{"schema":2,"realmId":"realm","ownerAddress":"0xowner","arcaPath":"/users/alice & one","boundaryId":"cash-boundary","cash":{"schema":1,"revision":17,"boundaryId":"cash-boundary","ownerAddress":"0xowner","walletState":"ready","balances":{"availableMicro":"1990000","confirmedMicro":"1990000"}},"accounts":[{"arcaId":"trade","arcaPath":"/users/alice & one/hl-1","boundaryId":"trade-boundary","kind":"hyperliquid_perp","accountAddress":"0xtrade","labels":{"name":"Hyperliquid 1","ordinal":"1"},"state":"ready","setupStatus":"active","lifecycle":"active","balances":{"totalMicro":"1010000","perpMicro":"1000000","withdrawableMicro":"1000000","spotMicro":"10000","source":"hyperliquid_ws"},"asOf":"2026-09-29T05:35:03Z","current":true,"heldBy":"opr_1"},{"arcaId":"trade-2","arcaPath":"/users/alice & one/hl-2","boundaryId":"trade-2","kind":"hyperliquid_perp","accountAddress":"","labels":{"name":"Hyperliquid 2"},"state":"declared","setupStatus":"declared","lifecycle":"active","declaredAt":"2026-09-29T05:00:00Z","balances":{"totalMicro":"0","perpMicro":"0","withdrawableMicro":"0","spotMicro":"0","source":"declared"},"current":true}],"moving":[{"operationId":"opr_1","kind":"move","leg":"in_transit","amountMicro":"500000","from":{"kind":"cash","boundaryId":"cash-boundary"},"to":{"kind":"trading","arcaId":"trade","boundaryId":"trade-boundary","address":"0xtrade"}}],"operations":[{"operationId":"opr_1","requestId":"req-1","kind":"move","stage":"arriving","status":"pending","safeToReviewAgain":false,"amountMicro":"500000","arrivesMicro":"500000","debitMicro":"510000","activationFeeMicro":"0","networkFeeMicro":"10000","from":{"kind":"cash","boundaryId":"cash-boundary"},"to":{"kind":"trading","arcaId":"trade"},"steps":[{"name":"move_evm","state":"confirmed","txHash":"0xabc","blockNumber":7}],"debitBooked":true,"creditBooked":false,"cashLeg":{"leg":"debit","state":"booked","amountMicro":"510000","txHash":"0xabc"},"requirements":[{"kind":"setup_signature","operationId":"opr_0","proposalId":"prop","actionIds":["act"],"expiresAt":99}],"settlement":{"sequence":3,"coreBlock":202,"amountMicro":"500000","feeMicro":"0","creditMicro":"500000","final":false},"createdAt":"2026-09-29T05:30:00Z"}],"totals":{"cashMicro":"1990000","movingMicro":"500000","tradingMicro":"1010000","totalMicro":"3500000","complete":true,"current":true},"attention":[],"watermark":{"sequence":41,"revision":40,"cashBlock":100,"cashBlockHash":"cash-hash","nativeObservedAt":1234,"settlementSequence":2,"lastSettlementBlock":200},"composedAt":"2026-09-29T05:35:04Z"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" || r.URL.Path != "/api/v1/custody/v9/funding/wallet-snapshot" || r.Header.Get("Authorization") != "Bearer fixture" {
 			t.Errorf("request identity: %s %s", r.Method, r.URL)
@@ -134,7 +169,7 @@ func TestFundingV9WalletSnapshotAndObservedReturnWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Cash.Revision != 17 || got.Watermark.SettlementSequence != 2 || len(got.Accounts) != 1 || got.Accounts[0].Observation == nil {
+	if got.Cash.Revision != 17 || got.Watermark.Sequence != 41 || len(got.Accounts) != 2 || got.Accounts[0].Balances == nil || len(got.Moving) != 1 || got.Operations[0].CashLeg == nil {
 		t.Fatalf("incomplete envelope: %+v", got)
 	}
 	assertFundingWirePreserved(t, []byte(wallet), got)
@@ -228,5 +263,44 @@ func TestFundingRecheckWire(t *testing.T) {
 	out, err := a.RecheckFundingV9Operation(context.Background(), "op/1")
 	if err != nil || out.Revision != "2" || out.Reason != "native_missing" || out.OperationID != "op/1" || calls != 1 {
 		t.Fatal(out, err, calls)
+	}
+}
+
+func TestFundingV9WalletsStreamResumesFromPosition(t *testing.T) {
+	const snap = `{"schema":2,"realmId":"realm","boundaryId":"cash-boundary","cash":{"schema":1,"boundaryId":"cash-boundary"},"accounts":[],"moving":[],"operations":[],"totals":{"cashMicro":"1","movingMicro":"0","tradingMicro":"0","totalMicro":"1","complete":true,"current":true},"attention":[],"watermark":{"sequence":8,"revision":8}}`
+	var lastIDs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if r.URL.Path == "/api/v1/custody/v9/funding/wallet-stream" {
+			fmt.Fprintf(w, "id: 8\nevent: snapshot\ndata: %s\n\n", snap)
+			return
+		}
+		if r.URL.Path != "/api/v1/custody/v9/funding/wallet-snapshots/stream" || r.URL.Query().Get("realmId") != "realm" {
+			t.Errorf("request: %s", r.URL)
+		}
+		lastIDs = append(lastIDs, r.Header.Get("Last-Event-ID"))
+		fmt.Fprintf(w, ": connected\n\nevent: wallet\ndata: %s\n\nevent: wallet_error\ndata: {\"boundaryId\":\"gone\",\"error\":\"unavailable\"}\n\nid: 9\nevent: position\ndata: {\"sequence\":9}\n\n", snap)
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	var got []FundingV9WalletsEvent
+	err := a.StreamFundingV9Wallets(context.Background(), 5, func(ev FundingV9WalletsEvent) error {
+		got = append(got, ev)
+		return nil
+	})
+	var disc *FundingV9WalletStreamDisconnectedError
+	if !errors.As(err, &disc) || disc.LastEventID != "9" {
+		t.Fatalf("disconnect must carry the last position: %v", err)
+	}
+	if len(got) != 3 || got[0].Wallet == nil || got[0].Wallet.Totals.TotalMicro != "1" || got[1].WalletError == nil || got[2].Position != 9 {
+		t.Fatalf("frames: %+v", got)
+	}
+	if len(lastIDs) != 1 || lastIDs[0] != "5" {
+		t.Fatalf("resume header: %v", lastIDs)
+	}
+	stop := errors.New("stop")
+	err = a.StreamFundingV9Wallet(context.Background(), "0xowner", "/users/a", "cash-boundary", "", func(FundingV9WalletSnapshot) error { return stop })
+	if !errors.Is(err, stop) {
+		t.Fatalf("a callback error must stop the wallet stream: %v", err)
 	}
 }

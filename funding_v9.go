@@ -31,6 +31,50 @@ type FundingV9Account struct {
 	WithdrawableBalance string                 `json:"withdrawableBalance"`
 	Observation         *FundingV9CoreSnapshot `json:"observation,omitempty"`
 	PermissionVersion   uint64                 `json:"permissionVersion"`
+	Labels              map[string]string      `json:"labels,omitempty"`
+	Lifecycle           string                 `json:"lifecycle,omitempty"`
+}
+
+// FundingV9DeclareRequest declares a trading account in an owner's wallet
+// without a chain action. Give ArcaPath (under the wallet root) or omit it
+// for Arca to choose; give ArcaID to catalogue an account that already
+// exists. Labels may carry "name" and "client"; an omitted name becomes
+// "Hyperliquid N" at the next unused ordinal.
+type FundingV9DeclareRequest struct {
+	RealmID      string            `json:"realmId"`
+	RequestID    string            `json:"requestId"`
+	OwnerAddress string            `json:"ownerAddress"`
+	BoundaryID   string            `json:"boundaryId"`
+	Kind         string            `json:"kind"`
+	ArcaPath     string            `json:"arcaPath,omitempty"`
+	ArcaID       string            `json:"arcaId,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+}
+
+// FundingV9AccountPatch renames (Labels["name"]) or archives (Lifecycle
+// "archived") a catalogued account. Revision, when set, must be the
+// account's current revision.
+type FundingV9AccountPatch struct {
+	RealmID   string            `json:"realmId"`
+	RequestID string            `json:"requestId,omitempty"`
+	Revision  uint64            `json:"revision,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Lifecycle string            `json:"lifecycle,omitempty"`
+}
+
+// FundingV9CatalogAccount is one account in a wallet's catalogue.
+type FundingV9CatalogAccount struct {
+	ArcaID           string            `json:"arcaId"`
+	ArcaPath         string            `json:"arcaPath"`
+	BoundaryID       string            `json:"boundaryId,omitempty"`
+	WalletBoundaryID string            `json:"walletBoundaryId"`
+	Kind             string            `json:"kind"`
+	OwnerAddress     string            `json:"ownerAddress"`
+	Labels           map[string]string `json:"labels"`
+	SetupStatus      string            `json:"setupStatus"`
+	Lifecycle        string            `json:"lifecycle"`
+	DeclaredAt       string            `json:"declaredAt,omitempty"`
+	Revision         uint64            `json:"revision"`
 }
 type FundingV9Action struct {
 	ID        string          `json:"id"`
@@ -178,6 +222,31 @@ func (a *Arca) ProposeFundingV9Account(ctx context.Context, r FundingV9SetupRequ
 	}
 	r.RealmID = realm
 	err = a.client.post(ctx, "/custody/v9/funding/accounts/propose", r, &out)
+	return out, err
+}
+// DeclareFundingV9Account records a trading account and its labels; the
+// first move into it performs its setup. Replaying a RequestID returns the
+// same account.
+func (a *Arca) DeclareFundingV9Account(ctx context.Context, r FundingV9DeclareRequest) (FundingV9CatalogAccount, error) {
+	var out FundingV9CatalogAccount
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	r.RealmID = realm
+	err = a.client.post(ctx, "/custody/v9/funding/accounts/declare", r, &out)
+	return out, err
+}
+
+// UpdateFundingV9Account renames or archives a catalogued account.
+func (a *Arca) UpdateFundingV9Account(ctx context.Context, id string, p FundingV9AccountPatch) (FundingV9CatalogAccount, error) {
+	var out FundingV9CatalogAccount
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	p.RealmID = realm
+	err = a.client.patch(ctx, "/custody/v9/funding/accounts/"+url.PathEscape(id), nil, p, &out)
 	return out, err
 }
 func (a *Arca) ProposeFundingV9Deposit(ctx context.Context, r FundingV9DepositRequest) (FundingV9Proposal, error) {
@@ -506,36 +575,162 @@ func (a *Arca) GetFundingV9Move(ctx context.Context, id string) (FundingV9MoveAd
 	return out, err
 }
 
-// FundingV9WalletWatermark binds the Cash journal cut and one native batch.
+// FundingV9WalletSnapshotSchema is the wallet snapshot schema this SDK reads.
+const FundingV9WalletSnapshotSchema = 2
+
+// FundingV9WalletWatermark states what the snapshot's figures describe.
+// Sequence is the realm journal position it was read at (a stream resumes
+// after it); Revision changes only when the wallet's own boundaries change.
 type FundingV9WalletWatermark struct {
-	CashRevision        uint64 `json:"cashRevision"`
+	Sequence            uint64 `json:"sequence"`
+	Revision            uint64 `json:"revision"`
 	CashBlock           uint64 `json:"cashBlock"`
-	NativeBlock         uint64 `json:"nativeBlock"`
-	NativeBlockHash     string `json:"nativeBlockHash"`
-	EVMBlock            uint64 `json:"evmBlock"`
+	CashBlockHash       string `json:"cashBlockHash,omitempty"`
+	NativeObservedAt    int64  `json:"nativeObservedAt"`
 	SettlementSequence  uint64 `json:"settlementSequence"`
 	LastSettlementBlock uint64 `json:"lastSettlementBlock"`
 }
 
-// FundingV9WalletSnapshot is the complete quiescent wallet monetary envelope.
-// Replace it as a whole. During unresolved movement the server refuses a new
-// envelope; retain the last complete one and mark it not current. Never merge
-// separate account reads or invent zero components after an unavailable read.
+type FundingV9WalletNativeBalances struct {
+	TotalMicro        string `json:"totalMicro"`
+	PerpMicro         string `json:"perpMicro"`
+	WithdrawableMicro string `json:"withdrawableMicro"`
+	SpotMicro         string `json:"spotMicro"`
+	Source            string `json:"source"`
+}
+
+// FundingV9WalletTradingAccount is one declared or deployed trading account.
+// Balances is null only for a deployed account never observed; AsOf is the
+// venue time the figures describe and Current is false once they go quiet.
+// HeldBy names the operation whose money is listed in Moving instead.
+type FundingV9WalletTradingAccount struct {
+	ArcaID         string                         `json:"arcaId"`
+	ArcaPath       string                         `json:"arcaPath"`
+	BoundaryID     string                         `json:"boundaryId"`
+	Kind           string                         `json:"kind"`
+	AccountAddress string                         `json:"accountAddress"`
+	Labels         map[string]string              `json:"labels"`
+	State          string                         `json:"state"`
+	SetupStatus    string                         `json:"setupStatus"`
+	Lifecycle      string                         `json:"lifecycle"`
+	DeclaredAt     string                         `json:"declaredAt,omitempty"`
+	Balances       *FundingV9WalletNativeBalances `json:"balances"`
+	AsOf           string                         `json:"asOf,omitempty"`
+	Current        bool                           `json:"current"`
+	HeldBy         string                         `json:"heldBy,omitempty"`
+}
+
+type FundingV9WalletEndpoint struct {
+	Kind       string `json:"kind"`
+	ArcaID     string `json:"arcaId,omitempty"`
+	BoundaryID string `json:"boundaryId,omitempty"`
+	Address    string `json:"address,omitempty"`
+}
+
+// FundingV9WalletMoving is money in flight: Leg is reserved (still held by
+// the source) or in_transit (left the source, not yet credited).
+type FundingV9WalletMoving struct {
+	OperationID string                  `json:"operationId"`
+	Kind        string                  `json:"kind"`
+	Leg         string                  `json:"leg"`
+	AmountMicro string                  `json:"amountMicro"`
+	From        FundingV9WalletEndpoint `json:"from"`
+	To          FundingV9WalletEndpoint `json:"to"`
+}
+
+type FundingV9WalletCashLeg struct {
+	Leg         string `json:"leg"`
+	State       string `json:"state"`
+	AmountMicro string `json:"amountMicro"`
+	TxHash      string `json:"txHash,omitempty"`
+}
+
+// FundingV9WalletRequirement is an owner answer the operation waits on;
+// Proposal carries the typed data to sign.
+type FundingV9WalletRequirement struct {
+	Kind        string             `json:"kind"`
+	OperationID string             `json:"operationId"`
+	ProposalID  string             `json:"proposalId"`
+	ActionIDs   []string           `json:"actionIds"`
+	ExpiresAt   int64              `json:"expiresAt"`
+	Proposal    *FundingV9Proposal `json:"proposal,omitempty"`
+}
+
+type FundingV9WalletSettlement struct {
+	Sequence      uint64 `json:"sequence"`
+	NativeTxHash  string `json:"nativeTxHash,omitempty"`
+	CoreBlock     uint64 `json:"coreBlock"`
+	CoreBlockHash string `json:"coreBlockHash,omitempty"`
+	AmountMicro   string `json:"amountMicro"`
+	FeeMicro      string `json:"feeMicro"`
+	CreditMicro   string `json:"creditMicro"`
+	Final         bool   `json:"final"`
+}
+
+// FundingV9WalletOperation is one funding operation with everything needed
+// to render its progress: stage, steps, requirements and settlement.
+type FundingV9WalletOperation struct {
+	OperationID        string                       `json:"operationId"`
+	RequestID          string                       `json:"requestId,omitempty"`
+	Kind               string                       `json:"kind"`
+	Stage              string                       `json:"stage"`
+	Status             string                       `json:"status"`
+	Attention          string                       `json:"attention,omitempty"`
+	Error              string                       `json:"error,omitempty"`
+	SafeToReviewAgain  bool                         `json:"safeToReviewAgain"`
+	AmountMicro        string                       `json:"amountMicro"`
+	ArrivesMicro       string                       `json:"arrivesMicro"`
+	DebitMicro         string                       `json:"debitMicro"`
+	ActivationFeeMicro string                       `json:"activationFeeMicro"`
+	NetworkFeeMicro    string                       `json:"networkFeeMicro"`
+	From               FundingV9WalletEndpoint      `json:"from"`
+	To                 FundingV9WalletEndpoint      `json:"to"`
+	Steps              []FundingV9MoveStep          `json:"steps"`
+	DebitBooked        bool                         `json:"debitBooked"`
+	CreditBooked       bool                         `json:"creditBooked"`
+	CashLeg            *FundingV9WalletCashLeg      `json:"cashLeg,omitempty"`
+	SetupOperationID   string                       `json:"setupOperationId,omitempty"`
+	SetupDeadline      int64                        `json:"setupDeadline,omitempty"`
+	Requirements       []FundingV9WalletRequirement `json:"requirements"`
+	Settlement         *FundingV9WalletSettlement   `json:"settlement,omitempty"`
+	TxHash             string                       `json:"txHash,omitempty"`
+	CreatedAt          string                       `json:"createdAt"`
+}
+
+// FundingV9WalletTotals holds TotalMicro = CashMicro + MovingMicro +
+// TradingMicro at every snapshot.
+type FundingV9WalletTotals struct {
+	CashMicro    string `json:"cashMicro"`
+	MovingMicro  string `json:"movingMicro"`
+	TradingMicro string `json:"tradingMicro"`
+	TotalMicro   string `json:"totalMicro"`
+	Complete     bool   `json:"complete"`
+	Current      bool   `json:"current"`
+}
+
+// FundingV9WalletSnapshot is the complete wallet at one journal position:
+// Cash, every trading account, money in flight and funding operations.
+// Replace it as a whole; it is never refused for movement in progress.
 type FundingV9WalletSnapshot struct {
-	Schema       int                      `json:"schema"`
-	RealmID      string                   `json:"realmId"`
-	OwnerAddress string                   `json:"ownerAddress"`
-	ArcaPath     string                   `json:"arcaPath"`
-	Cash         CashV9WalletAccount      `json:"cash"`
-	Accounts     []FundingV9Account       `json:"accounts"`
-	MovingMicro  string                   `json:"movingMicro"`
-	Watermark    FundingV9WalletWatermark `json:"watermark"`
+	Schema       int                             `json:"schema"`
+	RealmID      string                          `json:"realmId"`
+	OwnerAddress string                          `json:"ownerAddress"`
+	ArcaPath     string                          `json:"arcaPath"`
+	BoundaryID   string                          `json:"boundaryId"`
+	Cash         CashV9WalletAccount             `json:"cash"`
+	Accounts     []FundingV9WalletTradingAccount `json:"accounts"`
+	Moving       []FundingV9WalletMoving         `json:"moving"`
+	Operations   []FundingV9WalletOperation      `json:"operations"`
+	Totals       FundingV9WalletTotals           `json:"totals"`
+	Attention    []string                        `json:"attention"`
+	Watermark    FundingV9WalletWatermark        `json:"watermark"`
+	ComposedAt   string                          `json:"composedAt"`
 }
 
 // GetFundingV9WalletSnapshot reads Cash and every owned trading account under
 // arcaPath in a single complete envelope. Requires arca:ReadObject for both
-// the wallet root and Cash path. Refetch on durable change notifications;
-// this method is a one-shot read, not a polling subscription.
+// the wallet root and Cash path. It is a one-shot read; to follow a wallet,
+// use StreamFundingV9Wallet.
 func (a *Arca) GetFundingV9WalletSnapshot(ctx context.Context, ownerAddress, arcaPath, boundaryID string) (FundingV9WalletSnapshot, error) {
 	var out FundingV9WalletSnapshot
 	realm, err := a.realmID(ctx)
@@ -544,4 +739,175 @@ func (a *Arca) GetFundingV9WalletSnapshot(ctx context.Context, ownerAddress, arc
 	}
 	err = a.client.get(ctx, "/custody/v9/funding/wallet-snapshot", url.Values{"realmId": {realm}, "ownerAddress": {ownerAddress}, "arcaPath": {arcaPath}, "boundaryId": {boundaryID}}, &out)
 	return out, err
+}
+
+// FundingV9WalletStreamDisconnectedError ends a wallet stream; LastEventID is
+// the id to resume with.
+type FundingV9WalletStreamDisconnectedError struct {
+	LastEventID string
+	Cause       error
+}
+
+func (e *FundingV9WalletStreamDisconnectedError) Error() string {
+	return fmt.Sprintf("arca: wallet stream disconnected after %q: %v", e.LastEventID, e.Cause)
+}
+func (e *FundingV9WalletStreamDisconnectedError) Unwrap() error { return e.Cause }
+
+// FundingV9WalletError is a wallet the realm stream could not compose; the
+// stream continues past it.
+type FundingV9WalletError struct {
+	BoundaryID   string `json:"boundaryId"`
+	OwnerAddress string `json:"ownerAddress"`
+	ArcaPath     string `json:"arcaPath"`
+	Error        string `json:"error"`
+}
+
+// FundingV9WalletsEvent is one realm stream frame: exactly one of Wallet,
+// WalletError or Position is set. Position is the journal sequence every
+// earlier frame accounts for; persist it and resume after it.
+type FundingV9WalletsEvent struct {
+	Wallet      *FundingV9WalletSnapshot
+	WalletError *FundingV9WalletError
+	Position    uint64
+}
+
+// StreamFundingV9Wallet follows one wallet: a complete snapshot on connect
+// and after every change to it. Each snapshot replaces the last. Returns
+// *FundingV9WalletStreamDisconnectedError when the connection ends.
+func (a *Arca) StreamFundingV9Wallet(ctx context.Context, ownerAddress, arcaPath, boundaryID, lastEventID string, accept func(FundingV9WalletSnapshot) error) error {
+	if accept == nil {
+		return fmt.Errorf("arca: wallet snapshot callback required")
+	}
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return err
+	}
+	q := url.Values{"realmId": {realm}, "ownerAddress": {ownerAddress}, "arcaPath": {arcaPath}, "boundaryId": {boundaryID}}
+	return a.readFundingWalletSSE(ctx, "/custody/v9/funding/wallet-stream", q, lastEventID, func(event string, data []byte) error {
+		if event != "snapshot" {
+			return nil
+		}
+		var s FundingV9WalletSnapshot
+		if err := json.Unmarshal(data, &s); err != nil {
+			return fmt.Errorf("arca: wallet snapshot frame: %w", err)
+		}
+		if s.Schema != FundingV9WalletSnapshotSchema {
+			return fmt.Errorf("arca: wallet snapshot schema %d unsupported", s.Schema)
+		}
+		return accept(s)
+	})
+}
+
+// StreamFundingV9Wallets is a product backend's realm-wide feed: the complete
+// snapshot of every wallet that changed after `after`, then a position. A
+// callback error stops delivery without advancing past the frame. Returns
+// *FundingV9WalletStreamDisconnectedError carrying the last position.
+func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept func(FundingV9WalletsEvent) error) error {
+	if accept == nil {
+		return fmt.Errorf("arca: wallet stream callback required")
+	}
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return err
+	}
+	last := ""
+	if after > 0 {
+		last = fmt.Sprint(after)
+	}
+	return a.readFundingWalletSSE(ctx, "/custody/v9/funding/wallet-snapshots/stream", url.Values{"realmId": {realm}}, last, func(event string, data []byte) error {
+		var ev FundingV9WalletsEvent
+		switch event {
+		case "wallet":
+			ev.Wallet = new(FundingV9WalletSnapshot)
+			if err := json.Unmarshal(data, ev.Wallet); err != nil {
+				return fmt.Errorf("arca: wallet frame: %w", err)
+			}
+			if ev.Wallet.Schema != FundingV9WalletSnapshotSchema {
+				return fmt.Errorf("arca: wallet snapshot schema %d unsupported", ev.Wallet.Schema)
+			}
+		case "wallet_error":
+			ev.WalletError = new(FundingV9WalletError)
+			if err := json.Unmarshal(data, ev.WalletError); err != nil {
+				return fmt.Errorf("arca: wallet error frame: %w", err)
+			}
+		case "position":
+			var p struct {
+				Sequence uint64 `json:"sequence"`
+			}
+			if err := json.Unmarshal(data, &p); err != nil || p.Sequence == 0 {
+				return fmt.Errorf("arca: position frame %q", data)
+			}
+			ev.Position = p.Sequence
+		default:
+			return nil
+		}
+		return accept(ev)
+	})
+}
+
+// readFundingWalletSSE delivers each named frame to accept; the returned
+// disconnect error carries the last frame id seen after accept succeeded.
+func (a *Arca) readFundingWalletSSE(ctx context.Context, path string, q url.Values, lastEventID string, accept func(event string, data []byte) error) error {
+	endpoint, err := a.client.buildURL(path, q)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+a.client.getCredential())
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
+	if a.client.headerHook != nil {
+		for k, v := range a.client.headerHook() {
+			req.Header.Set(k, v)
+		}
+	}
+	client := *a.client.http
+	client.Timeout = 0
+	response, err := client.Do(req)
+	if err != nil {
+		return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: err}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return a.client.unwrap(response, nil)
+	}
+	if !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		return fmt.Errorf("arca: wallet stream unavailable (content-type %q)", response.Header.Get("Content-Type"))
+	}
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	var event, id string
+	var data []string
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			if len(data) > 0 {
+				if err := accept(event, []byte(strings.Join(data, "\n"))); err != nil {
+					return err
+				}
+				if id != "" {
+					lastEventID = id
+				}
+			}
+			event, id, data = "", "", nil
+		case strings.HasPrefix(line, ":"):
+		case strings.HasPrefix(line, "id:"):
+			id = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	cause := scanner.Err()
+	if cause == nil {
+		cause = io.ErrUnexpectedEOF
+	}
+	return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: cause}
 }
