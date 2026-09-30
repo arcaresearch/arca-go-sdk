@@ -279,7 +279,7 @@ func TestFundingV9WalletsStreamResumesFromPosition(t *testing.T) {
 			t.Errorf("request: %s", r.URL)
 		}
 		lastIDs = append(lastIDs, r.Header.Get("Last-Event-ID"))
-		fmt.Fprintf(w, ": connected\n\nevent: wallet\ndata: %s\n\nevent: wallet_error\ndata: {\"boundaryId\":\"gone\",\"error\":\"unavailable\"}\n\nid: 9\nevent: position\ndata: {\"sequence\":9}\n\n", snap)
+		fmt.Fprintf(w, ": connected\n\nevent: wallet\ndata: %s\n\nid: 9\nevent: position\ndata: {\"sequence\":9}\n\nevent: caught_up\ndata: {\"sequence\":9}\n\nevent: wallet_error\ndata: {\"boundaryId\":\"gone\",\"error\":\"unavailable\"}\n\nid: 10\nevent: position\ndata: {\"sequence\":10}\n\n", snap)
 	}))
 	defer srv.Close()
 	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
@@ -292,7 +292,7 @@ func TestFundingV9WalletsStreamResumesFromPosition(t *testing.T) {
 	if !errors.As(err, &disc) || disc.LastEventID != "9" {
 		t.Fatalf("disconnect must carry the last position: %v", err)
 	}
-	if len(got) != 3 || got[0].Wallet == nil || got[0].Wallet.Totals.TotalMicro != "1" || got[1].WalletError == nil || got[2].Position != 9 {
+	if len(got) != 4 || got[0].Wallet == nil || got[0].Wallet.Totals.TotalMicro != "1" || got[1].Position != 9 || got[2].CaughtUp == nil || got[2].CaughtUp.Sequence != 9 || got[3].WalletError == nil {
 		t.Fatalf("frames: %+v", got)
 	}
 	if len(lastIDs) != 1 || lastIDs[0] != "5" {
@@ -302,5 +302,41 @@ func TestFundingV9WalletsStreamResumesFromPosition(t *testing.T) {
 	err = a.StreamFundingV9Wallet(context.Background(), "0xowner", "/users/a", "cash-boundary", "", func(FundingV9WalletSnapshot) error { return stop })
 	if !errors.Is(err, stop) {
 		t.Fatalf("a callback error must stop the wallet stream: %v", err)
+	}
+}
+
+func TestFundingV9CatalogFeeFactsAndSetupProgress(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("realmId") != "realm" {
+			t.Error("realm scope missing")
+		}
+		switch r.URL.Path {
+		case "/api/v1/custody/v9/funding/accounts/a/catalog":
+			fmt.Fprint(w, `{"success":true,"data":{"arcaId":"a","factsSequence":18,"setupRetryable":false,"activation":"owed","activationEvidence":{"source":"circle_credit","operationId":"deposit","nativeTxHash":"native"},"deferredActivationFeeRaw":"1000000","deferredActivationFeeState":"owed","deferredActivationFeeTrigger":"first_outbound_send_asset","fundingState":"funded","capabilities":{"move_in":{"allowed":true},"move_out":{"allowed":false,"reason":"route_disabled"}}}}`)
+		case "/api/v1/custody/v9/funding/operations/move":
+			fmt.Fprint(w, `{"success":true,"data":{"operationId":"move","status":"pending","stage":"awaiting_setup","setupState":"deploying","requirements":[]}}`)
+		default:
+			t.Error("unexpected path", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	facts, err := a.GetFundingV9CatalogAccount(context.Background(), "a")
+	if err != nil || facts.FactsSequence != 18 || facts.Activation != "owed" || facts.DeferredActivationFeeRaw != "1000000" || facts.ActivationEvidence == nil || facts.ActivationEvidence.NativeTxHash != "native" || !facts.Capabilities["move_in"].Allowed {
+		t.Fatalf("facts %+v %v", facts, err)
+	}
+	op, err := a.GetFundingV9Operation(context.Background(), "move")
+	if err != nil || op.SetupState != "deploying" || op.Status != "pending" || len(op.Requirements) != 0 {
+		t.Fatalf("accepted setup %+v %v", op, err)
+	}
+	for _, raw := range []string{`{"activation":"unknown","deferredActivationFeeState":"unknown"}`, `{"activation":"paid","deferredActivationFeeRaw":"0","deferredActivationFeeState":"paid"}`} {
+		var f FundingV9AccountFacts
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			t.Fatal(err)
+		}
+		if (f.Activation == "paid") != (f.DeferredActivationFeeRaw == "0") {
+			t.Fatalf("unknown collapsed to paid: %+v", f)
+		}
 	}
 }

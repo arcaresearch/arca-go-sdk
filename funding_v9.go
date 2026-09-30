@@ -12,6 +12,7 @@ import (
 )
 
 type FundingV9Account struct {
+	FundingV9AccountFacts
 	ArcaID              string                 `json:"arcaId"`
 	BoundaryID          string                 `json:"boundaryId"`
 	ArcaPath            string                 `json:"arcaPath"`
@@ -64,6 +65,7 @@ type FundingV9AccountPatch struct {
 
 // FundingV9CatalogAccount is one account in a wallet's catalogue.
 type FundingV9CatalogAccount struct {
+	FundingV9AccountFacts
 	ArcaID           string            `json:"arcaId"`
 	ArcaPath         string            `json:"arcaPath"`
 	BoundaryID       string            `json:"boundaryId,omitempty"`
@@ -113,6 +115,9 @@ type FundingV9SourceDebitEvidence struct {
 	AuthorizationNonce string `json:"authorizationNonce"`
 }
 type FundingV9Operation struct {
+	Requirements        []FundingV9WalletRequirement  `json:"requirements"`
+	SetupState          string                        `json:"setupState"`
+	FeePayments         []FundingV9FeePayment         `json:"feePayments,omitempty"`
 	SafeToReviewAgain   bool                          `json:"safeToReviewAgain"`
 	OperationID         string                        `json:"operationId"`
 	ProposalID          string                        `json:"proposalId"`
@@ -224,6 +229,7 @@ func (a *Arca) ProposeFundingV9Account(ctx context.Context, r FundingV9SetupRequ
 	err = a.client.post(ctx, "/custody/v9/funding/accounts/propose", r, &out)
 	return out, err
 }
+
 // DeclareFundingV9Account records a trading account and its labels; the
 // first move into it performs its setup. Replaying a RequestID returns the
 // same account.
@@ -451,6 +457,7 @@ type FundingV9MoveRefusal struct {
 // in DebitRaw; actual charges appear on the settled move. MinimumRaw/MaxRaw
 // are inclusive. Refusal explains an invalid amount without admitting it.
 type FundingV9MoveQuote struct {
+	FundingV9DeferredActivationFee
 	Route               string                `json:"route"`
 	From                FundingV9MoveSide     `json:"from"`
 	To                  FundingV9MoveSide     `json:"to"`
@@ -506,6 +513,7 @@ type FundingV9MoveStep struct {
 }
 
 type FundingV9MoveState struct {
+	FundingV9DeferredActivationFee
 	// Actual amounts are absent before the correlated return debit is booked.
 	// NetworkFeeRaw and DebitRaw remain the immutable quote's upper bounds.
 	ActualDebitRaw      string              `json:"actualDebitRaw,omitempty"`
@@ -604,6 +612,7 @@ type FundingV9WalletNativeBalances struct {
 // venue time the figures describe and Current is false once they go quiet.
 // HeldBy names the operation whose money is listed in Moving instead.
 type FundingV9WalletTradingAccount struct {
+	FundingV9AccountFacts
 	ArcaID         string                         `json:"arcaId"`
 	ArcaPath       string                         `json:"arcaPath"`
 	BoundaryID     string                         `json:"boundaryId"`
@@ -670,6 +679,9 @@ type FundingV9WalletSettlement struct {
 // FundingV9WalletOperation is one funding operation with everything needed
 // to render its progress: stage, steps, requirements and settlement.
 type FundingV9WalletOperation struct {
+	SetupState  string                `json:"setupState"`
+	FeePayments []FundingV9FeePayment `json:"feePayments,omitempty"`
+	FundingV9DeferredActivationFee
 	OperationID        string                       `json:"operationId"`
 	RequestID          string                       `json:"requestId,omitempty"`
 	Kind               string                       `json:"kind"`
@@ -753,8 +765,8 @@ func (e *FundingV9WalletStreamDisconnectedError) Error() string {
 }
 func (e *FundingV9WalletStreamDisconnectedError) Unwrap() error { return e.Cause }
 
-// FundingV9WalletError is a wallet the realm stream could not compose; the
-// stream continues past it.
+// FundingV9WalletError precedes connection closure without a checkpoint.
+// Mark the wallet stale; reconnect resnapshots it even without another write.
 type FundingV9WalletError struct {
 	BoundaryID   string `json:"boundaryId"`
 	OwnerAddress string `json:"ownerAddress"`
@@ -763,12 +775,19 @@ type FundingV9WalletError struct {
 }
 
 // FundingV9WalletsEvent is one realm stream frame: exactly one of Wallet,
-// WalletError or Position is set. Position is the journal sequence every
-// earlier frame accounts for; persist it and resume after it.
+// WalletError, Position or CaughtUp is set. Persist Position only after the
+// preceding wallet projections are durable. CaughtUp is not an absence proof.
 type FundingV9WalletsEvent struct {
 	Wallet      *FundingV9WalletSnapshot
 	WalletError *FundingV9WalletError
 	Position    uint64
+	// CaughtUp follows a complete bootstrap/journal drain. It is not an
+	// acknowledgment or evidence that an absent operation never existed.
+	CaughtUp *FundingV9WalletPosition
+}
+
+type FundingV9WalletPosition struct {
+	Sequence uint64 `json:"sequence"`
 }
 
 // StreamFundingV9Wallet follows one wallet: a complete snapshot on connect
@@ -830,6 +849,11 @@ func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept 
 			if err := json.Unmarshal(data, ev.WalletError); err != nil {
 				return fmt.Errorf("arca: wallet error frame: %w", err)
 			}
+		case "caught_up":
+			ev.CaughtUp = new(FundingV9WalletPosition)
+			if err := json.Unmarshal(data, ev.CaughtUp); err != nil {
+				return fmt.Errorf("arca: caught_up frame: %w", err)
+			}
 		case "position":
 			var p struct {
 				Sequence uint64 `json:"sequence"`
@@ -841,7 +865,13 @@ func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept 
 		default:
 			return nil
 		}
-		return accept(ev)
+		if err := accept(ev); err != nil {
+			return err
+		}
+		if ev.WalletError != nil {
+			return fmt.Errorf("arca: wallet %s not composable: %s", ev.WalletError.BoundaryID, ev.WalletError.Error)
+		}
+		return nil
 	})
 }
 
@@ -889,7 +919,7 @@ func (a *Arca) readFundingWalletSSE(ctx context.Context, path string, q url.Valu
 		case line == "":
 			if len(data) > 0 {
 				if err := accept(event, []byte(strings.Join(data, "\n"))); err != nil {
-					return err
+					return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: err}
 				}
 				if id != "" {
 					lastEventID = id
@@ -910,4 +940,52 @@ func (a *Arca) readFundingWalletSSE(ctx context.Context, path string, q url.Valu
 		cause = io.ErrUnexpectedEOF
 	}
 	return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: cause}
+}
+
+// FundingV9AccountFacts are durable fee and lifecycle facts, not balance adjustments.
+type FundingV9AccountFacts struct {
+	FundingV9DeferredActivationFee
+	FactsSequence      uint64                                `json:"factsSequence"`
+	SetupRetryable     bool                                  `json:"setupRetryable"`
+	Activation         string                                `json:"activation"`
+	ActivationEvidence *FundingV9ActivationEvidence          `json:"activationEvidence,omitempty"`
+	FundingState       string                                `json:"fundingState"`
+	Capabilities       map[string]FundingV9AccountCapability `json:"capabilities"`
+}
+type FundingV9AccountCapability struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+type FundingV9DeferredActivationFee struct {
+	DeferredActivationFeeRaw     string `json:"deferredActivationFeeRaw,omitempty"`
+	DeferredActivationFeeState   string `json:"deferredActivationFeeState,omitempty"`
+	DeferredActivationFeeTrigger string `json:"deferredActivationFeeTrigger,omitempty"`
+}
+type FundingV9ActivationEvidence struct {
+	Source       string `json:"source"`
+	OperationID  string `json:"operationId,omitempty"`
+	NativeTxHash string `json:"nativeTxHash,omitempty"`
+	ObservedAt   int64  `json:"observedAt,omitempty"`
+}
+
+// FundingV9FeePayment classifies an actual charge within the total source debit.
+type FundingV9FeePayment struct {
+	ID           string   `json:"id"`
+	Kind         string   `json:"kind"`
+	PayerArcaID  string   `json:"payerArcaId"`
+	AccountIDs   []string `json:"accountIds"`
+	OperationID  string   `json:"operationId"`
+	AmountRaw    string   `json:"amountRaw"`
+	NativeTxHash string   `json:"nativeTxHash"`
+}
+
+// GetFundingV9CatalogAccount retrieves labels, lifecycle and fee evidence without a chain read.
+func (a *Arca) GetFundingV9CatalogAccount(ctx context.Context, arcaID string) (FundingV9CatalogAccount, error) {
+	var out FundingV9CatalogAccount
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.get(ctx, "/custody/v9/funding/accounts/"+url.PathEscape(arcaID)+"/catalog", url.Values{"realmId": {realm}}, &out)
+	return out, err
 }
