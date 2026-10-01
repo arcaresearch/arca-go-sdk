@@ -557,3 +557,22 @@ Operation waits register listeners before subscribing. Startup, actual gaps, rea
 
 Operation snapshot evidence: Terminal operations in the initial or buffered subscription snapshot resolve the wait before any HTTP read, including typed failed/expired results. Socket rotation requests fresh operation evidence on the replacement connection; its pong only establishes transport readiness. Stale snapshot request IDs and unrelated operation IDs cannot settle the wait.
 Verified snapshot operations are shared with all live waiters, including results buffered while another caller refreshes the same root watch; each waiter still accepts only its original operation ID.
+
+## Wallet execution candidate (2026-09-30)
+
+Wallet action proposals, verified provider wallets and deposit links express
+intent and owner consent to Arca. Arca owns execution, source reservations,
+gas/nonce management and settlement; a builder does not run a sweep worker.
+The additive wallet `accounting` envelope includes canonical source, Cash,
+trading and in-transit money at one committed position. Preserve null amounts
+and completeness/freshness; custody-only `totals` retains its earlier meaning.
+
+Go exposes `StreamFundingV9WalletsWithTransport`; TypeScript exposes
+`streamFundingV9Wallets`. Both use bounded buffering and await the consumer
+before acknowledging a position. Heartbeats indicate connection health only.
+Reconnect from the last durably applied position, retaining prior coherent
+money as stale across incomplete/error frames. Wallet mutations are single-send;
+resolve uncertain outcomes using the original operation/request identity.
+Deposit links accept optional `maxCashMicro` and `maxDepositMicro` product caps;
+admission preserves partial deposits and leaves the remainder at source.
+This source has not yet been published; no deployed-wallet parity is implied.

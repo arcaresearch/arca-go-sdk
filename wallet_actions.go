@@ -13,8 +13,9 @@ import (
 // Supported kinds: set_up_account, send, enable_automatic_deposits (two
 // requirements, route consent and token permit, admitted together),
 // revoke_automatic_deposits and source_send. The last three execute through
-// the realm's execution relay; a realm without one answers them with the
-// limitation unsupported_action.
+// Arca's configured wallet executor after an explicit realm cutover. Legacy
+// accepted proposals retain their original relay. A realm without execution
+// support answers unsupported_action.
 
 // WalletRequestedAction names the action and the objects it concerns.
 // set_up_account takes CashPath and SourceAddress (the owner); send takes

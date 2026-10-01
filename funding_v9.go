@@ -612,6 +612,8 @@ type FundingV9WalletNativeBalances struct {
 // venue time the figures describe and Current is false once they go quiet.
 // HeldBy names the operation whose money is listed in Moving instead.
 type FundingV9WalletTradingAccount struct {
+	LocalID  string `json:"localId,omitempty"`
+	Revision uint64 `json:"revision"`
 	FundingV9AccountFacts
 	ArcaID         string                         `json:"arcaId"`
 	ArcaPath       string                         `json:"arcaPath"`
@@ -630,6 +632,7 @@ type FundingV9WalletTradingAccount struct {
 }
 
 type FundingV9WalletEndpoint struct {
+	ArcaPath   string `json:"arcaPath,omitempty"`
 	Kind       string `json:"kind"`
 	ArcaID     string `json:"arcaId,omitempty"`
 	BoundaryID string `json:"boundaryId,omitempty"`
@@ -679,8 +682,10 @@ type FundingV9WalletSettlement struct {
 // FundingV9WalletOperation is one funding operation with everything needed
 // to render its progress: stage, steps, requirements and settlement.
 type FundingV9WalletOperation struct {
-	SetupState  string                `json:"setupState"`
-	FeePayments []FundingV9FeePayment `json:"feePayments,omitempty"`
+	ActualDebitMicro      string                `json:"actualDebitMicro,omitempty"`
+	ActualNetworkFeeMicro string                `json:"actualNetworkFeeMicro,omitempty"`
+	SetupState            string                `json:"setupState"`
+	FeePayments           []FundingV9FeePayment `json:"feePayments,omitempty"`
 	FundingV9DeferredActivationFee
 	OperationID        string                       `json:"operationId"`
 	RequestID          string                       `json:"requestId,omitempty"`
@@ -724,6 +729,9 @@ type FundingV9WalletTotals struct {
 // Cash, every trading account, money in flight and funding operations.
 // Replace it as a whole; it is never refused for movement in progress.
 type FundingV9WalletSnapshot struct {
+	Accounting   *FundingV9WalletAccounting      `json:"accounting,omitempty"`
+	CashTarget   FundingV9WalletEndpoint         `json:"cashTarget"`
+	CashAccount  *FundingV9WalletCashAccount     `json:"cashAccount,omitempty"`
 	Schema       int                             `json:"schema"`
 	RealmID      string                          `json:"realmId"`
 	OwnerAddress string                          `json:"ownerAddress"`
@@ -778,6 +786,8 @@ type FundingV9WalletError struct {
 // WalletError, Position or CaughtUp is set. Persist Position only after the
 // preceding wallet projections are durable. CaughtUp is not an absence proof.
 type FundingV9WalletsEvent struct {
+	// Transport is connected or heartbeat; neither certifies accounting freshness.
+	Transport   string
 	Wallet      *FundingV9WalletSnapshot
 	WalletError *FundingV9WalletError
 	Position    uint64
@@ -822,6 +832,17 @@ func (a *Arca) StreamFundingV9Wallet(ctx context.Context, ownerAddress, arcaPath
 // callback error stops delivery without advancing past the frame. Returns
 // *FundingV9WalletStreamDisconnectedError carrying the last position.
 func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept func(FundingV9WalletsEvent) error) error {
+	return a.streamFundingV9Wallets(ctx, after, false, accept)
+}
+
+// StreamFundingV9WalletsWithTransport also delivers connection/heartbeat
+// notifications for durable consumers that maintain a liveness watchdog.
+// These notifications do not advance the journal checkpoint.
+func (a *Arca) StreamFundingV9WalletsWithTransport(ctx context.Context, after uint64, accept func(FundingV9WalletsEvent) error) error {
+	return a.streamFundingV9Wallets(ctx, after, true, accept)
+}
+
+func (a *Arca) streamFundingV9Wallets(ctx context.Context, after uint64, transport bool, accept func(FundingV9WalletsEvent) error) error {
 	if accept == nil {
 		return fmt.Errorf("arca: wallet stream callback required")
 	}
@@ -836,6 +857,11 @@ func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept 
 	return a.readFundingWalletSSE(ctx, "/custody/v9/funding/wallet-snapshots/stream", url.Values{"realmId": {realm}}, last, func(event string, data []byte) error {
 		var ev FundingV9WalletsEvent
 		switch event {
+		case ":connected", ":heartbeat":
+			if !transport {
+				return nil
+			}
+			ev.Transport = strings.TrimPrefix(event, ":")
 		case "wallet":
 			ev.Wallet = new(FundingV9WalletSnapshot)
 			if err := json.Unmarshal(data, ev.Wallet); err != nil {
@@ -913,25 +939,48 @@ func (a *Arca) readFundingWalletSSE(ctx context.Context, path string, q url.Valu
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	var event, id string
 	var data []string
+	frameBytes := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
 		case line == "":
 			if len(data) > 0 {
-				if err := accept(event, []byte(strings.Join(data, "\n"))); err != nil {
+				payload := []byte(strings.Join(data, "\n"))
+				// Realm frames acknowledge their own sequence only. A mismatched
+				// SSE id would otherwise skip uncommitted money on reconnection.
+				if strings.HasSuffix(path, "/wallet-snapshots/stream") && event == "position" {
+					var position struct {
+						Sequence *uint64 `json:"sequence"`
+					}
+					if err := json.Unmarshal(payload, &position); err != nil || position.Sequence == nil || id != fmt.Sprint(*position.Sequence) {
+						return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: fmt.Errorf("arca: wallet frame position mismatch")}
+					}
+				}
+				if err := accept(event, payload); err != nil {
 					return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: err}
 				}
-				if id != "" {
+				if id != "" && (!strings.HasSuffix(path, "/wallet-snapshots/stream") || event == "position") {
 					lastEventID = id
 				}
 			}
 			event, id, data = "", "", nil
+			frameBytes = 0
 		case strings.HasPrefix(line, ":"):
+			comment := strings.TrimSpace(strings.TrimPrefix(line, ":"))
+			if comment == "connected" || comment == "heartbeat" {
+				if err := accept(":"+comment, nil); err != nil {
+					return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: err}
+				}
+			}
 		case strings.HasPrefix(line, "id:"):
 			id = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
+			frameBytes += len(line)
+			if frameBytes > 8<<20 {
+				return &FundingV9WalletStreamDisconnectedError{LastEventID: lastEventID, Cause: fmt.Errorf("arca: wallet frame exceeds 8 MiB")}
+			}
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
 	}
@@ -988,4 +1037,36 @@ func (a *Arca) GetFundingV9CatalogAccount(ctx context.Context, arcaID string) (F
 	}
 	err = a.client.get(ctx, "/custody/v9/funding/accounts/"+url.PathEscape(arcaID)+"/catalog", url.Values{"realmId": {realm}}, &out)
 	return out, err
+}
+
+// FundingV9WalletAccounting is the authoritative whole-wallet monetary envelope.
+// Nil amounts remain unknown. Replace the envelope as one unit.
+type FundingV9WalletAccounting struct {
+	Revision           uint64  `json:"revision"`
+	SourceMicro        *string `json:"sourceMicro"`
+	CashMicro          string  `json:"cashMicro"`
+	AvailableCashMicro string  `json:"availableCashMicro"`
+	TradingMicro       string  `json:"tradingMicro"`
+	MovingMicro        string  `json:"movingMicro"`
+	TotalMicro         *string `json:"totalMicro"`
+	Complete           bool    `json:"complete"`
+	Current            bool    `json:"current"`
+	CashBlock          uint64  `json:"cashBlock"`
+	CashBlockHash      string  `json:"cashBlockHash"`
+}
+
+type FundingV9WalletCashAccount struct {
+	ArcaID            string                 `json:"arcaId"`
+	DefaultArcaID     string                 `json:"defaultArcaId"`
+	ArcaPath          string                 `json:"arcaPath"`
+	LocalID           string                 `json:"localId"`
+	AccountStatus     string                 `json:"accountStatus"`
+	PermissionVersion uint64                 `json:"permissionVersion"`
+	RecoveryReadyAt   uint64                 `json:"recoveryReadyAt"`
+	RecoveryCommitted bool                   `json:"recoveryCommitted"`
+	DefaultMicro      string                 `json:"defaultMicro"`
+	DefaultAvailMicro string                 `json:"defaultAvailableMicro"`
+	UnallocatedMicro  string                 `json:"unallocatedMicro"`
+	DepositAddresses  []CashV9DepositAddress `json:"depositAddresses"`
+	Activity          []CashV9Operation      `json:"activity"`
 }

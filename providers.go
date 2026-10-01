@@ -193,6 +193,8 @@ const (
 // CreateDepositLinkOptions names both ends explicitly. RequestID is the
 // idempotency key.
 type CreateDepositLinkOptions struct {
+	MaxDepositMicro     string `json:"maxDepositMicro,omitempty"`
+	MaxCashMicro        string `json:"maxCashMicro,omitempty"`
 	RequestID           string `json:"requestId"`
 	SourceObjectID      string `json:"sourceObjectId"`
 	SourceWalletID      string `json:"sourceWalletId"`
@@ -249,7 +251,9 @@ type DepositLinkConsent struct {
 
 // DepositLinkLimits are a link's standing limits.
 type DepositLinkLimits struct {
-	AllowanceMicro string `json:"allowanceMicro,omitempty"`
+	MaxDepositMicro string `json:"maxDepositMicro,omitempty"`
+	MaxCashMicro    string `json:"maxCashMicro,omitempty"`
+	AllowanceMicro  string `json:"allowanceMicro,omitempty"`
 }
 
 // DepositRouteObservation is the observed route state of a link.

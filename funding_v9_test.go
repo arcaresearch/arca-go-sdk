@@ -340,3 +340,18 @@ func TestFundingV9CatalogFeeFactsAndSetupProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestWalletStreamRejectsPositionMismatchWithoutAcknowledging(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "id: 8\nevent: position\ndata: {\"sequence\":9}\n\n")
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	calls := 0
+	err := a.StreamFundingV9Wallets(context.Background(), 5, func(FundingV9WalletsEvent) error { calls++; return nil })
+	var disconnected *FundingV9WalletStreamDisconnectedError
+	if !errors.As(err, &disconnected) || disconnected.LastEventID != "5" || calls != 0 {
+		t.Fatalf("mismatched position accepted: %d %v", calls, err)
+	}
+}

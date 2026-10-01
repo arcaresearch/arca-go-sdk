@@ -18,6 +18,7 @@ type CashV9Proposal struct {
 	Kind         string          `json:"kind"`
 }
 type CashV9Operation struct {
+	Counterpart         string `json:"counterpart,omitempty"`
 	Attribution         string `json:"attribution,omitempty"`
 	AllocationAccountID string `json:"allocationAccountId,omitempty"`
 	BoundaryID          string `json:"boundaryId"`
@@ -172,6 +173,7 @@ type CashV9WalletBalances struct {
 // address observer projects it. BalanceMicro is nil when unknown — never "0"
 // as a stand-in. Health values are the address-observation contract's.
 type CashV9WalletSource struct {
+	Accounting           bool       `json:"accounting,omitempty"`
 	Address              string     `json:"address"`
 	BalanceMicro         *string    `json:"balanceMicro"`
 	Health               string     `json:"health"`
