@@ -315,7 +315,8 @@ money as stale across incomplete/error frames. Wallet mutations are single-send;
 resolve uncertain outcomes using the original operation/request identity.
 Deposit links accept optional `maxCashMicro` and `maxDepositMicro` product caps;
 admission preserves partial deposits and leaves the remainder at source.
-This source has not yet been published; no deployed-wallet parity is implied.
+These Go client APIs were published in v2.10.0. Server execution cutover remains
+separately gated; installing the SDK does not enable it.
 
 The isolated [owned-wallet SDK integration](integration/wallet-owned/README.md)
 exercises the supported API, original execution and coherent wallet SSE against
@@ -323,6 +324,7 @@ real local Spanner and frozen chain bytecode using disposable fixture keys.
 
 ### Resolving an expired funding move
 
+Available in Go v2.11.0; the server must support the retirement endpoint.
 Keep the original `FundingV9MoveRequest`, including its quote expiry and monetary
 terms. After expiry, `RetireFundingV9Move(ctx, original)` atomically resolves the
 admission identity: it returns the original admission if already accepted, or
