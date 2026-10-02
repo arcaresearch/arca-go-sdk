@@ -320,3 +320,13 @@ This source has not yet been published; no deployed-wallet parity is implied.
 The isolated [owned-wallet SDK integration](integration/wallet-owned/README.md)
 exercises the supported API, original execution and coherent wallet SSE against
 real local Spanner and frozen chain bytecode using disposable fixture keys.
+
+### Resolving an expired funding move
+
+Keep the original `FundingV9MoveRequest`, including its quote expiry and monetary
+terms. After expiry, `RetireFundingV9Move(ctx, original)` atomically resolves the
+admission identity: it returns the original admission if already accepted, or
+`retired=true` only after a durable fence prevents delayed admission. An error,
+404, disconnected stream or omitted snapshot is never retirement evidence.
+Retirement cannot cancel an accepted operation. Follow that operation's stream;
+a new user-approved move requires a new quote and request identity.

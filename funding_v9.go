@@ -572,6 +572,37 @@ func (a *Arca) CreateFundingV9Move(ctx context.Context, r FundingV9MoveRequest) 
 	return out, err
 }
 
+// RetireFundingV9Move fences an expired request against late admission. Retired
+// is true only for an explicit durable fence; an ordinary 404 is never proof.
+// If admission won the race, the original admitted move is returned instead.
+func (a *Arca) RetireFundingV9Move(ctx context.Context, r FundingV9MoveRequest) (admission FundingV9MoveAdmission, retired bool, err error) {
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return admission, false, err
+	}
+	r.RealmID = realm
+	var out struct {
+		Status      string                  `json:"status"`
+		RequestID   string                  `json:"requestId"`
+		OperationID string                  `json:"operationId"`
+		Admission   *FundingV9MoveAdmission `json:"admission,omitempty"`
+	}
+	if err = a.client.post(ctx, "/custody/v9/funding/moves/retire", r, &out); err != nil {
+		return admission, false, err
+	}
+	if out.RequestID != r.RequestID || out.OperationID == "" {
+		return admission, false, fmt.Errorf("arca: move retirement identity mismatch")
+	}
+	switch {
+	case out.Status == "retired" && out.Admission == nil:
+		return admission, true, nil
+	case out.Status == "accepted" && out.Admission != nil && out.Admission.Operation.OperationID == out.OperationID:
+		return *out.Admission, false, nil
+	default:
+		return admission, false, fmt.Errorf("arca: incomplete move retirement evidence")
+	}
+}
+
 // GetFundingV9Move reads a move. StreamFundingV9Operation follows it by id.
 func (a *Arca) GetFundingV9Move(ctx context.Context, id string) (FundingV9MoveAdmission, error) {
 	var out FundingV9MoveAdmission

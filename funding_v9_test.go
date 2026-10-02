@@ -355,3 +355,44 @@ func TestWalletStreamRejectsPositionMismatchWithoutAcknowledging(t *testing.T) {
 		t.Fatalf("mismatched position accepted: %d %v", calls, err)
 	}
 }
+
+func TestRetireFundingMoveRequiresDurableScopedEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, body  string
+		status      int
+		retired, ok bool
+	}{
+		{"retired", `{"status":"retired","requestId":"original","operationId":"op_1"}`, 200, true, true},
+		{"accepted", `{"status":"accepted","requestId":"original","operationId":"op_1","admission":{"operation":{"operationId":"op_1","status":"pending"}}}`, 200, false, true},
+		{"wrong request", `{"status":"retired","requestId":"other","operationId":"op_1"}`, 200, false, false},
+		{"wrong operation", `{"status":"accepted","requestId":"original","operationId":"op_1","admission":{"operation":{"operationId":"op_2"}}}`, 200, false, false},
+		{"contradiction", `{"status":"retired","requestId":"original","operationId":"op_1","admission":{"operation":{"operationId":"op_1"}}}`, 200, false, false},
+		{"plain not found", `{}`, 404, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" || r.URL.Path != "/api/v1/custody/v9/funding/moves/retire" {
+					t.Error("unexpected request", r.Method, r.URL)
+				}
+				var req FundingV9MoveRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+				}
+				if req.RealmID != "realm" || req.RequestID != "original" || req.QuoteExpiresAt != 99 || req.AmountRaw != "5000000" {
+					t.Error("original terms changed", req)
+				}
+				w.WriteHeader(tc.status)
+				fmt.Fprintf(w, `{"success":true,"data":%s}`, tc.body)
+			}))
+			defer srv.Close()
+			a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+			adm, retired, err := a.RetireFundingV9Move(context.Background(), FundingV9MoveRequest{RealmID: "untrusted", RequestID: "original", QuoteExpiresAt: 99, AmountRaw: "5000000"})
+			if (err == nil) != tc.ok || retired != tc.retired {
+				t.Fatal(retired, err)
+			}
+			if tc.name == "accepted" && adm.Operation.OperationID != "op_1" {
+				t.Fatal("lost original acceptance")
+			}
+		})
+	}
+}
