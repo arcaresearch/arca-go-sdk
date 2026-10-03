@@ -37,6 +37,12 @@ type WalletRequestedAction struct {
 	Destination             string `json:"destination,omitempty"`
 	DestinationCashObjectID string `json:"destinationCashObjectId,omitempty"`
 	DepositLinkID           string `json:"depositLinkId,omitempty"`
+	// Reference, on a send, is the product's opaque correlation string (for
+	// example a payout provider's reference): at most 128 printable
+	// characters, stored on the accepted operation and echoed on the Wallet
+	// Account's operations[].reference. It is part of the request identity
+	// and never part of what the owner signs. Other kinds refuse it.
+	Reference string `json:"reference,omitempty"`
 }
 
 // WalletSchemaCapability is one signing schema, at one version, and the

@@ -206,6 +206,13 @@ type CashV9WalletOperation struct {
 	StartedAt   string `json:"startedAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	CanRetry    bool   `json:"canRetry"`
+	// RequestID is the Cash propose route's idempotency key and
+	// ActionProposalID the action proposal whose accepted attempt created the
+	// operation (exactly one is set); Reference is the opaque string a send
+	// was requested with. Match a lost reply on the stream by these.
+	RequestID        string `json:"requestId,omitempty"`
+	ActionProposalID string `json:"actionProposalId,omitempty"`
+	Reference        string `json:"reference,omitempty"`
 }
 
 // CashV9WalletAccount is the Wallet Account read model: one owner-facing
