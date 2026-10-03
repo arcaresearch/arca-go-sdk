@@ -603,6 +603,64 @@ func (a *Arca) RetireFundingV9Move(ctx context.Context, r FundingV9MoveRequest) 
 	}
 }
 
+// Move resolution statuses returned by ResolveFundingV9Move.
+const (
+	// FundingV9MoveAccepted: the request was admitted; Admission carries it.
+	FundingV9MoveAccepted = "accepted"
+	// FundingV9MoveRetired: a durable fence proves the request can never be
+	// admitted. Nothing moved.
+	FundingV9MoveRetired = "retired"
+	// FundingV9MoveAbsent: nothing durable names the key yet. The request may
+	// still arrive, or be re-sent identically, until its quote expires; after
+	// that RetireFundingV9Move settles it. Absent is not a fence.
+	FundingV9MoveAbsent = "absent"
+)
+
+// FundingV9MoveResolution is what became of a request key.
+type FundingV9MoveResolution struct {
+	Status      string                  `json:"status"`
+	RequestID   string                  `json:"requestId"`
+	OperationID string                  `json:"operationId"`
+	Admission   *FundingV9MoveAdmission `json:"admission,omitempty"`
+}
+
+// ResolveFundingV9Move answers a request key without admitting or retiring
+// anything: FundingV9MoveAccepted with the admission a lost create reply
+// would have carried, FundingV9MoveRetired, or FundingV9MoveAbsent. It
+// requires arca:ReadObject at the realm root (the product backend's lane).
+// The lost-reply protocol is: re-send the identical CreateFundingV9Move (it
+// returns the admission before any gate), or resolve here; once the quote
+// has expired and the key is still absent, RetireFundingV9Move fences it.
+func (a *Arca) ResolveFundingV9Move(ctx context.Context, requestID string) (FundingV9MoveResolution, error) {
+	var out FundingV9MoveResolution
+	if requestID == "" {
+		return out, fmt.Errorf("arca: requestId required")
+	}
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	if err = a.client.get(ctx, "/custody/v9/funding/moves", url.Values{"realmId": {realm}, "requestId": {requestID}}, &out); err != nil {
+		return out, err
+	}
+	if out.RequestID != requestID || out.OperationID == "" {
+		return out, fmt.Errorf("arca: move resolution identity mismatch")
+	}
+	switch out.Status {
+	case FundingV9MoveAccepted:
+		if out.Admission == nil || out.Admission.Operation.OperationID != out.OperationID {
+			return out, fmt.Errorf("arca: incomplete move resolution evidence")
+		}
+	case FundingV9MoveRetired, FundingV9MoveAbsent:
+		if out.Admission != nil {
+			return out, fmt.Errorf("arca: incomplete move resolution evidence")
+		}
+	default:
+		return out, fmt.Errorf("arca: unknown move resolution status %q", out.Status)
+	}
+	return out, nil
+}
+
 // GetFundingV9Move reads a move. StreamFundingV9Operation follows it by id.
 func (a *Arca) GetFundingV9Move(ctx context.Context, id string) (FundingV9MoveAdmission, error) {
 	var out FundingV9MoveAdmission

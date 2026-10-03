@@ -396,3 +396,46 @@ func TestRetireFundingMoveRequiresDurableScopedEvidence(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveFundingV9MoveReadsByRequestKey pins the product backend's
+// lost-reply read: a GET on the request key (never a write), the three
+// statuses, and refusal of evidence that does not add up (an accepted answer
+// without its admission, or a status the SDK does not know).
+func TestResolveFundingV9MoveReadsByRequestKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		body   string
+		ok     bool
+		status string
+	}{
+		{"accepted", `{"status":"accepted","requestId":"k1","operationId":"op_1","admission":{"operation":{"operationId":"op_1","kind":"cash_to_trading"}}}`, true, FundingV9MoveAccepted},
+		{"retired", `{"status":"retired","requestId":"k1","operationId":"op_1"}`, true, FundingV9MoveRetired},
+		{"absent", `{"status":"absent","requestId":"k1","operationId":"op_1"}`, true, FundingV9MoveAbsent},
+		{"accepted without admission", `{"status":"accepted","requestId":"k1","operationId":"op_1"}`, false, ""},
+		{"absent with admission", `{"status":"absent","requestId":"k1","operationId":"op_1","admission":{"operation":{"operationId":"op_1"}}}`, false, ""},
+		{"foreign key", `{"status":"absent","requestId":"other","operationId":"op_1"}`, false, ""},
+		{"unknown status", `{"status":"maybe","requestId":"k1","operationId":"op_1"}`, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/custody/v9/funding/moves" || r.URL.Query().Get("requestId") != "k1" || r.URL.Query().Get("realmId") != "realm" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL)
+				}
+				fmt.Fprintf(w, `{"success":true,"data":%s}`, tc.body)
+			}))
+			defer srv.Close()
+			a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+			got, err := a.ResolveFundingV9Move(context.Background(), "k1")
+			if (err == nil) != tc.ok {
+				t.Fatalf("ok=%v err=%v", tc.ok, err)
+			}
+			if tc.ok && (got.Status != tc.status || got.OperationID != "op_1" || (tc.status == FundingV9MoveAccepted) != (got.Admission != nil)) {
+				t.Fatalf("resolution: %+v", got)
+			}
+		})
+	}
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: "http://unused/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	if _, err := a.ResolveFundingV9Move(context.Background(), ""); err == nil {
+		t.Fatal("an empty request key must be refused before any request")
+	}
+}

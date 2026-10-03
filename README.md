@@ -332,3 +332,11 @@ admission identity: it returns the original admission if already accepted, or
 404, disconnected stream or omitted snapshot is never retirement evidence.
 Retirement cannot cancel an accepted operation. Follow that operation's stream;
 a new user-approved move requires a new quote and request identity.
+
+Before the quote expires, `ResolveFundingV9Move(ctx, requestID)` reads the key
+without admitting or fencing anything: `FundingV9MoveAccepted` carries the
+admission a lost reply would have, `FundingV9MoveRetired` is the durable fence,
+`FundingV9MoveAbsent` means nothing durable names the key yet (not a fence —
+re-send the identical create, or retire after expiry). It needs
+`arca:ReadObject` at the realm root. Refusals before admission are definite:
+`V9_FUNDING_HALTED` (503) and `V9_MOVE_INSUFFICIENT_BALANCE` (409) reserve nothing.
