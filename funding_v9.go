@@ -718,6 +718,26 @@ type FundingV9WalletTradingAccount struct {
 	AsOf           string                         `json:"asOf,omitempty"`
 	Current        bool                           `json:"current"`
 	HeldBy         string                         `json:"heldBy,omitempty"`
+	// Routes are the standing shapes of cash_to_trading (into this account)
+	// and trading_to_cash (out of it) at this snapshot: availability with its
+	// reason, inclusive MinimumRaw/MaxRaw, the activation fee and the
+	// network-fee bound, from the same pure quote logic admission re-runs.
+	// Render fee hints and limits from them; quote only for a priced review.
+	Routes []FundingV9WalletRoutePreview `json:"routes"`
+}
+
+// FundingV9WalletRoutePreview is one route's standing shape on a trading
+// account. It is advisory: a quote is the priced, expiring review admission
+// re-prices; a preview never admits or reserves.
+type FundingV9WalletRoutePreview struct {
+	Route            string `json:"route"`
+	Allowed          bool   `json:"allowed"`
+	Reason           string `json:"reason,omitempty"`
+	MinimumRaw       string `json:"minimumRaw,omitempty"`
+	MaxRaw           string `json:"maxRaw,omitempty"`
+	ActivationFeeRaw string `json:"activationFeeRaw,omitempty"`
+	NetworkFeeRaw    string `json:"networkFeeRaw,omitempty"`
+	RequiresSetup    bool   `json:"requiresSetup"`
 }
 
 type FundingV9WalletEndpoint struct {
