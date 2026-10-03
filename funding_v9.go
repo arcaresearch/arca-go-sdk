@@ -949,17 +949,36 @@ func (a *Arca) StreamFundingV9Wallet(ctx context.Context, ownerAddress, arcaPath
 // callback error stops delivery without advancing past the frame. Returns
 // *FundingV9WalletStreamDisconnectedError carrying the last position.
 func (a *Arca) StreamFundingV9Wallets(ctx context.Context, after uint64, accept func(FundingV9WalletsEvent) error) error {
-	return a.streamFundingV9Wallets(ctx, after, false, accept)
+	return a.streamFundingV9Wallets(ctx, after, FundingV9WalletsStreamOptions{}, accept)
 }
 
 // StreamFundingV9WalletsWithTransport also delivers connection/heartbeat
 // notifications for durable consumers that maintain a liveness watchdog.
 // These notifications do not advance the journal checkpoint.
 func (a *Arca) StreamFundingV9WalletsWithTransport(ctx context.Context, after uint64, accept func(FundingV9WalletsEvent) error) error {
-	return a.streamFundingV9Wallets(ctx, after, true, accept)
+	return a.streamFundingV9Wallets(ctx, after, FundingV9WalletsStreamOptions{Transport: true}, accept)
 }
 
-func (a *Arca) streamFundingV9Wallets(ctx context.Context, after uint64, transport bool, accept func(FundingV9WalletsEvent) error) error {
+// FundingV9WalletsStreamOptions tunes the realm stream.
+type FundingV9WalletsStreamOptions struct {
+	// Transport delivers connection/heartbeat notifications (they never
+	// advance the checkpoint).
+	Transport bool
+	// Bootstrap asks for every wallet again on a resume. A resume on a realm
+	// whose source changes are journaled (Arca-owned execution) otherwise
+	// sends only what changed after the position plus pre-Cash wallets, so
+	// unchanged wallets keep their freshness; set it on the reconnect after
+	// a FundingV9WalletError, or when the consumer wants a full refresh. A
+	// first connect and a legacy realm always receive every wallet.
+	Bootstrap bool
+}
+
+// StreamFundingV9WalletsWithOptions is StreamFundingV9Wallets with options.
+func (a *Arca) StreamFundingV9WalletsWithOptions(ctx context.Context, after uint64, opts FundingV9WalletsStreamOptions, accept func(FundingV9WalletsEvent) error) error {
+	return a.streamFundingV9Wallets(ctx, after, opts, accept)
+}
+
+func (a *Arca) streamFundingV9Wallets(ctx context.Context, after uint64, opts FundingV9WalletsStreamOptions, accept func(FundingV9WalletsEvent) error) error {
 	if accept == nil {
 		return fmt.Errorf("arca: wallet stream callback required")
 	}
@@ -971,7 +990,12 @@ func (a *Arca) streamFundingV9Wallets(ctx context.Context, after uint64, transpo
 	if after > 0 {
 		last = fmt.Sprint(after)
 	}
-	return a.readFundingWalletSSE(ctx, "/custody/v9/funding/wallet-snapshots/stream", url.Values{"realmId": {realm}}, last, func(event string, data []byte) error {
+	transport := opts.Transport
+	query := url.Values{"realmId": {realm}}
+	if opts.Bootstrap {
+		query.Set("bootstrap", "1")
+	}
+	return a.readFundingWalletSSE(ctx, "/custody/v9/funding/wallet-snapshots/stream", query, last, func(event string, data []byte) error {
 		var ev FundingV9WalletsEvent
 		switch event {
 		case ":connected", ":heartbeat":

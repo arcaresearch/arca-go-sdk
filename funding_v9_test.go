@@ -266,6 +266,27 @@ func TestFundingRecheckWire(t *testing.T) {
 	}
 }
 
+// TestFundingV9WalletsStreamBootstrapOption pins the resume knob: the plain
+// stream sends no bootstrap flag (the server decides from the realm), and
+// Bootstrap asks for every wallet again with `bootstrap=1` while still
+// resuming from the position.
+func TestFundingV9WalletsStreamBootstrapOption(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.Header.Get("Last-Event-ID")+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, ": connected\n\nevent: caught_up\ndata: {\"sequence\":5}\n\n")
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	accept := func(FundingV9WalletsEvent) error { return nil }
+	_ = a.StreamFundingV9Wallets(context.Background(), 5, accept)
+	_ = a.StreamFundingV9WalletsWithOptions(context.Background(), 5, FundingV9WalletsStreamOptions{Bootstrap: true}, accept)
+	if len(queries) != 2 || queries[0] != "5?realmId=realm" || queries[1] != "5?bootstrap=1&realmId=realm" {
+		t.Fatalf("requests: %v", queries)
+	}
+}
+
 func TestFundingV9WalletsStreamResumesFromPosition(t *testing.T) {
 	const snap = `{"schema":2,"realmId":"realm","boundaryId":"cash-boundary","cash":{"schema":1,"boundaryId":"cash-boundary"},"accounts":[],"moving":[],"operations":[],"totals":{"cashMicro":"1","movingMicro":"0","tradingMicro":"0","totalMicro":"1","complete":true,"current":true},"attention":[],"watermark":{"sequence":8,"revision":8}}`
 	var lastIDs []string
