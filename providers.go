@@ -193,7 +193,10 @@ const (
 // CreateDepositLinkOptions names both ends explicitly. RequestID is the
 // idempotency key.
 type CreateDepositLinkOptions struct {
-	MaxDepositMicro     string `json:"maxDepositMicro,omitempty"`
+	MaxDepositMicro string `json:"maxDepositMicro,omitempty"`
+	// MinDepositMicro holds arrivals at the source until the source balance
+	// reaches it, so dust never costs a forward; never above MaxDepositMicro.
+	MinDepositMicro     string `json:"minDepositMicro,omitempty"`
 	MaxCashMicro        string `json:"maxCashMicro,omitempty"`
 	RequestID           string `json:"requestId"`
 	SourceObjectID      string `json:"sourceObjectId"`
@@ -252,6 +255,7 @@ type DepositLinkConsent struct {
 // DepositLinkLimits are a link's standing limits.
 type DepositLinkLimits struct {
 	MaxDepositMicro string `json:"maxDepositMicro,omitempty"`
+	MinDepositMicro string `json:"minDepositMicro,omitempty"`
 	MaxCashMicro    string `json:"maxCashMicro,omitempty"`
 	AllowanceMicro  string `json:"allowanceMicro,omitempty"`
 }

@@ -575,6 +575,8 @@ before acknowledging a position. Heartbeats indicate connection health only.
 Reconnect from the last durably applied position, retaining prior coherent
 money as stale across incomplete/error frames. Wallet mutations are single-send;
 resolve uncertain outcomes using the original operation/request identity.
-Deposit links accept optional `maxCashMicro` and `maxDepositMicro` product caps;
-admission preserves partial deposits and leaves the remainder at source.
+Deposit links accept optional `maxCashMicro`, `maxDepositMicro` and `minDepositMicro`
+product limits; admission preserves partial deposits and leaves the remainder at
+source, and holds a source balance below the minimum there (no sweep, no
+reservation) until arrivals add up to it.
 This source has not yet been published; no deployed-wallet parity is implied.
