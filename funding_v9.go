@@ -817,6 +817,14 @@ type FundingV9WalletTotals struct {
 // FundingV9WalletSnapshot is the complete wallet at one journal position:
 // Cash, every trading account, money in flight and funding operations.
 // Replace it as a whole; it is never refused for movement in progress.
+//
+// A wallet exists from the moment its funding source is registered (a
+// verified provider wallet), not only from Cash setup: before a Cash
+// boundary exists the snapshot has an empty BoundaryID, Cash in
+// setup_required with zero balances and the source as observed, no accounts,
+// nothing moving, no operations and no Accounting. Key such a wallet by
+// (OwnerAddress, ArcaPath); the Cash wallet that supersedes it carries the
+// same pair with its BoundaryID set.
 type FundingV9WalletSnapshot struct {
 	Accounting   *FundingV9WalletAccounting      `json:"accounting,omitempty"`
 	CashTarget   FundingV9WalletEndpoint         `json:"cashTarget"`
