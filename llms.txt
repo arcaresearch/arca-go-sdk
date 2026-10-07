@@ -581,4 +581,8 @@ Deposit links accept optional `maxCashMicro`, `maxDepositMicro` and `minDepositM
 product limits; admission preserves partial deposits and leaves the remainder at
 source, and holds a source balance below the minimum there (no sweep, no
 reservation) until arrivals add up to it.
-This source has not yet been published; no deployed-wallet parity is implied.
+These stream options and deposit limits are published in Go SDK v2.12.0;
+SDK publication alone does not enable owned execution in a deployed realm.
+An existing deposit-link action retains the link's recorded adapter across
+realm adapter replacement, including reads, approval retries and signed
+revocations. New links require the current completed realm deployment.
