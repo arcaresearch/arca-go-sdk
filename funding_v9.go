@@ -83,23 +83,24 @@ type FundingV9Action struct {
 	TypedData json.RawMessage `json:"typedData"`
 }
 type FundingV9Proposal struct {
-	ConsentVersion string            `json:"consentVersion,omitempty"`
-	FundingIntent  json.RawMessage   `json:"fundingIntent,omitempty"`
-	ProposalID     string            `json:"proposalId"`
-	OperationID    string            `json:"operationId"`
-	Kind           string            `json:"kind"`
-	ArcaID         string            `json:"arcaId"`
-	BoundaryID     string            `json:"boundaryId"`
-	Target         FundingV9Account  `json:"target"`
-	SourceAddress  string            `json:"sourceAddress"`
-	RouterAddress  string            `json:"routerAddress"`
-	Amount         string            `json:"amount"`
-	AmountRaw      string            `json:"amountRaw"`
-	ActivationFee  string            `json:"activationFee"`
-	ExpectedCredit string            `json:"expectedCredit"`
-	GasSponsored   bool              `json:"gasSponsored"`
-	ExpiresAt      int64             `json:"expiresAt"`
-	Actions        []FundingV9Action `json:"actions"`
+	Trading        *FundingV9TradingAuthorization `json:"trading,omitempty"`
+	ConsentVersion string                         `json:"consentVersion,omitempty"`
+	FundingIntent  json.RawMessage                `json:"fundingIntent,omitempty"`
+	ProposalID     string                         `json:"proposalId"`
+	OperationID    string                         `json:"operationId"`
+	Kind           string                         `json:"kind"`
+	ArcaID         string                         `json:"arcaId"`
+	BoundaryID     string                         `json:"boundaryId"`
+	Target         FundingV9Account               `json:"target"`
+	SourceAddress  string                         `json:"sourceAddress"`
+	RouterAddress  string                         `json:"routerAddress"`
+	Amount         string                         `json:"amount"`
+	AmountRaw      string                         `json:"amountRaw"`
+	ActivationFee  string                         `json:"activationFee"`
+	ExpectedCredit string                         `json:"expectedCredit"`
+	GasSponsored   bool                           `json:"gasSponsored"`
+	ExpiresAt      int64                          `json:"expiresAt"`
+	Actions        []FundingV9Action              `json:"actions"`
 }
 type FundingV9Signature struct {
 	ActionID  string `json:"actionId"`
