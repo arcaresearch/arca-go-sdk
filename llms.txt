@@ -587,7 +587,7 @@ An existing deposit-link action retains the link's recorded adapter across
 realm adapter replacement, including reads, approval retries and signed
 revocations. New links require the current completed realm deployment.
 
-## V9 owner-authorized trading (candidate)
+## V9 owner-authorized trading (Go SDK v2.13.0)
 
 ProposeFundingV9Trading(ctx, FundingV9TradingAuthorizationRequest{ArcaID, RequestID,
 BuilderFeeTenthsBps}) proposes five-minute SetAgent (fee zero) or BuilderFee
@@ -598,4 +598,4 @@ permissions alone do not replace custody consent. Recover uncertain submission
 with GetFundingV9Proposal and StreamFundingV9Operation; never auto-sign or replay
 a replacement. EVM submission is not native approval. Missing native builder
 fee consent returns V9_BUILDER_FEE_CONSENT_REQUIRED; no unsigned fallback occurs.
-These additions require the corresponding platform deployment and SDK release.
+Available in Go SDK v2.13.0; requires the corresponding platform deployment and realm enablement.
