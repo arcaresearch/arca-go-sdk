@@ -298,6 +298,11 @@ schemaVersion — upgrade, do not guess). Contract: documents/contracts/address-
 
 ## V9 cash Wallet Account (one read per wallet)
 
+For a deployed V9 Hyperliquid account, GetExchangeState can be read with
+arca:ReadObject before trading consent or agent registration. This grants no
+order authority. Optional FeeRates are observed venue rates; nil means unknown,
+never zero. Account state reads remain available while trading admission is off.
+
 GetCashV9WalletAccount composes what a wallet screen needs from Arca's durable
 records — the V9 cash boundary plus the address watch on its owner — so a product
 renders it instead of re-deriving it from the account read, the observer and chain
