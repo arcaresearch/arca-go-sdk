@@ -377,6 +377,68 @@ func TestWalletStreamRejectsPositionMismatchWithoutAcknowledging(t *testing.T) {
 	}
 }
 
+func TestFundingSendCarriesRecipientAndConsent(t *testing.T) {
+	const recipient = "0x00000000000000000000000000000000000000C1"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/custody/v9/funding/moves/quote":
+			var req FundingV9MoveQuoteRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Recipient != recipient || req.ToArcaID != "" {
+				t.Error("send quote request changed", req)
+			}
+			fmt.Fprintf(w, `{"success":true,"data":{"route":"trading_to_external","from":{"kind":"hyperliquid","arcaId":"trading"},"to":{"kind":"external","accountAddress":"%s"},"amountRaw":"500000","activationFeeRaw":"1000000","networkFeeRaw":"10000","arrivesRaw":"500000","debitRaw":"1510000","minimumRaw":"1","maxRaw":"2990000","fromActivation":"owed","toActivation":"","fromActivationAfter":"paid","expiresAt":99}}`, recipient)
+		case "/api/v1/custody/v9/funding/moves":
+			var req FundingV9MoveRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Recipient != recipient || req.ToArcaID != "" || req.ActivationFeeRaw != "1000000" {
+				t.Error("send create request changed", req)
+			}
+			w.WriteHeader(202)
+			fmt.Fprint(w, `{"success":true,"data":{"operation":{"operationId":"send","kind":"trading_to_external","stage":"awaiting_consent","status":"pending","move":{"route":"trading_to_external","consent":{"proposalId":"c1","attempt":1,"expiresAt":300,"signed":false}}},"consent":{"proposalId":"c1","operationId":"send","kind":"move_consent","actions":[{"id":"move_evm"}]}}}`)
+		case "/api/v1/custody/v9/funding/moves/consent":
+			var req FundingV9SubmitRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.RealmID != "realm" || req.ProposalID != "c1" || len(req.Signatures) != 1 || req.Signatures[0].ActionID != "move_evm" {
+				t.Error("consent submit changed", req)
+			}
+			w.WriteHeader(202)
+			fmt.Fprint(w, `{"success":true,"data":{"operationId":"send","stage":"accepted","status":"pending"}}`)
+		case "/api/v1/custody/v9/funding/moves/send/consent/renew":
+			var req struct {
+				RealmID string `json:"realmId"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			if r.Method != http.MethodPost || req.RealmID != "realm" {
+				t.Error("renew request changed", r.Method, req)
+			}
+			fmt.Fprint(w, `{"success":true,"data":{"operation":{"operationId":"send","stage":"awaiting_consent","status":"pending","move":{"consent":{"proposalId":"c2","attempt":2}}},"consent":{"proposalId":"c2"}}}`)
+		default:
+			t.Error("unexpected endpoint", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	ctx := context.Background()
+	q, err := a.QuoteFundingV9Move(ctx, FundingV9MoveQuoteRequest{FromArcaID: "trading", Recipient: recipient, AmountRaw: "500000"})
+	if err != nil || q.Route != FundingV9RouteTradingToExternal || q.ActivationFeeRaw != "1000000" {
+		t.Fatal(q, err)
+	}
+	out, err := a.CreateFundingV9Move(ctx, FundingV9MoveRequestFromQuote("send-1", q))
+	if err != nil || out.Consent == nil || out.Consent.ProposalID != "c1" || out.Operation.Move.Consent == nil || out.Operation.Move.Consent.Attempt != 1 {
+		t.Fatal(out, err)
+	}
+	op, err := a.SubmitFundingV9MoveConsent(ctx, FundingV9SubmitRequest{ProposalID: "c1", Signatures: []FundingV9Signature{{ActionID: "move_evm", Signature: "0x01"}}})
+	if err != nil || op.Stage != "accepted" {
+		t.Fatal(op, err)
+	}
+	renewed, err := a.RenewFundingV9MoveConsent(ctx, "send")
+	if err != nil || renewed.Consent == nil || renewed.Consent.ProposalID != "c2" || renewed.Operation.Move.Consent.Attempt != 2 {
+		t.Fatal(renewed, err)
+	}
+}
+
 func TestRetireFundingMoveRequiresDurableScopedEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name, body  string

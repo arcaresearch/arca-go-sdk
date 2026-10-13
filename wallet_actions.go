@@ -37,6 +37,10 @@ type WalletRequestedAction struct {
 	Destination             string `json:"destination,omitempty"`
 	DestinationCashObjectID string `json:"destinationCashObjectId,omitempty"`
 	DepositLinkID           string `json:"depositLinkId,omitempty"`
+	// TradingObjectID, on enable_automatic_deposits, routes the source into
+	// that trading account through the trading deposit adapter instead of
+	// into Cash. CashObjectID still names the owner's Cash account.
+	TradingObjectID string `json:"tradingObjectId,omitempty"`
 	// Reference, on a send, is the product's opaque correlation string (for
 	// example a payout provider's reference): at most 128 printable
 	// characters, stored on the accepted operation and echoed on the Wallet
@@ -89,6 +93,9 @@ type WalletRequirementScope struct {
 	Spender            string                 `json:"spender,omitempty"`
 	Adapter            string                 `json:"adapter,omitempty"`
 	Router             string                 `json:"router,omitempty"`
+	Builder            string                 `json:"builder,omitempty"`
+	MaxFeeRate         string                 `json:"maxFeeRate,omitempty"`
+	Agent              string                 `json:"agent,omitempty"`
 	Token              string                 `json:"token,omitempty"`
 	AmountMicro        string                 `json:"amountMicro,omitempty"`
 	Allowance          string                 `json:"allowance,omitempty"`

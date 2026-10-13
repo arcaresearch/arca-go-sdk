@@ -431,12 +431,15 @@ type FundingV9MoveSetup struct {
 }
 
 // FundingV9MoveQuoteRequest amounts are integer raw USDC strings (6
-// decimals). An empty AmountRaw returns the bounds only.
+// decimals). An empty AmountRaw returns the bounds only. A move names one
+// destination: ToArcaID, Setup, or Recipient (an outside address; the route
+// is trading_to_external).
 type FundingV9MoveQuoteRequest struct {
 	RealmID    string              `json:"realmId"`
 	FromArcaID string              `json:"fromArcaId"`
 	ToArcaID   string              `json:"toArcaId,omitempty"`
 	Setup      *FundingV9MoveSetup `json:"setup,omitempty"`
+	Recipient  string              `json:"recipient,omitempty"`
 	AmountRaw  string              `json:"amountRaw,omitempty"`
 }
 
@@ -487,6 +490,7 @@ type FundingV9MoveRequest struct {
 	FromArcaID       string              `json:"fromArcaId"`
 	ToArcaID         string              `json:"toArcaId,omitempty"`
 	Setup            *FundingV9MoveSetup `json:"setup,omitempty"`
+	Recipient        string              `json:"recipient,omitempty"`
 	AmountRaw        string              `json:"amountRaw"`
 	ActivationFeeRaw string              `json:"activationFeeRaw"`
 	NetworkFeeRaw    string              `json:"networkFeeRaw"`
@@ -499,11 +503,19 @@ type FundingV9MoveRequest struct {
 // FundingV9MoveRequestFromQuote copies a quote's reviewed terms into a create.
 func FundingV9MoveRequestFromQuote(requestID string, q FundingV9MoveQuote) FundingV9MoveRequest {
 	r := FundingV9MoveRequest{RequestID: requestID, FromArcaID: q.From.ArcaID, AmountRaw: q.AmountRaw, ActivationFeeRaw: q.ActivationFeeRaw, NetworkFeeRaw: q.NetworkFeeRaw, FromActivation: q.FromActivation, ToActivation: q.ToActivation, QuoteExpiresAt: q.ExpiresAt}
-	if !q.RequiresSetup {
+	switch {
+	case q.Route == FundingV9RouteTradingToExternal:
+		r.Recipient = q.To.AccountAddress
+	case !q.RequiresSetup:
 		r.ToArcaID = q.To.ArcaID
 	}
 	return r
 }
+
+// FundingV9RouteTradingToExternal is a send from a trading account to an
+// outside address. Its last leg is a Move the owner signs: the admission
+// carries it as Consent (answer it with SubmitFundingV9MoveConsent).
+const FundingV9RouteTradingToExternal = "trading_to_external"
 
 type FundingV9MoveStep struct {
 	Name        string `json:"name"`
@@ -536,14 +548,49 @@ type FundingV9MoveState struct {
 	CreditBooked        bool                `json:"creditBooked"`
 	SetupOperationID    string              `json:"setupOperationId,omitempty"`
 	SetupDeadline       int64               `json:"setupDeadline,omitempty"`
+	// Consent is a send's current owner-signed Move (trading_to_external).
+	Consent *FundingV9MoveConsent `json:"consent,omitempty"`
+}
+
+// FundingV9MoveConsent is a send's current consent. Attempt counts the
+// consents the send has asked for; a send whose operator legs outlast one
+// asks again instead of failing.
+type FundingV9MoveConsent struct {
+	ProposalID string `json:"proposalId"`
+	Attempt    int    `json:"attempt"`
+	ExpiresAt  int64  `json:"expiresAt"`
+	Signed     bool   `json:"signed"`
 }
 
 // FundingV9MoveAdmission is a move and, when its destination needs setup,
 // the owner-signed creation it waits for (sign and submit it with
-// SubmitFundingV9Account before SetupDeadline).
+// SubmitFundingV9Account before SetupDeadline). A send waiting at stage
+// awaiting_consent carries Consent, the Move its owner signs (submit it
+// with SubmitFundingV9MoveConsent before it expires).
 type FundingV9MoveAdmission struct {
 	Operation FundingV9Operation `json:"operation"`
 	Setup     *FundingV9Proposal `json:"setup,omitempty"`
+	Consent   *FundingV9Proposal `json:"consent,omitempty"`
+}
+
+// SubmitFundingV9MoveConsent answers a send's consent with the owner's
+// signature. An answer to a replaced or expired consent is refused.
+func (a *Arca) SubmitFundingV9MoveConsent(ctx context.Context, r FundingV9SubmitRequest) (FundingV9Operation, error) {
+	return a.submitFundingV9(ctx, "moves/consent", r)
+}
+
+// RenewFundingV9MoveConsent asks a send for a fresh consent once the one it
+// holds can no longer carry its last leg. Sends renew on their own a few
+// times; past that the owner's client asks here. A consent that is still
+// answerable is refused with V9_SEND_CONSENT_NOT_RENEWABLE.
+func (a *Arca) RenewFundingV9MoveConsent(ctx context.Context, id string) (FundingV9MoveAdmission, error) {
+	var out FundingV9MoveAdmission
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = a.client.post(ctx, "/custody/v9/funding/moves/"+url.PathEscape(id)+"/consent/renew", map[string]string{"realmId": realm}, &out)
+	return out, err
 }
 
 // QuoteFundingV9Move prices a move between Cash and the owner's own trading
@@ -719,12 +766,25 @@ type FundingV9WalletTradingAccount struct {
 	AsOf           string                         `json:"asOf,omitempty"`
 	Current        bool                           `json:"current"`
 	HeldBy         string                         `json:"heldBy,omitempty"`
-	// Routes are the standing shapes of cash_to_trading (into this account)
-	// and trading_to_cash (out of it) at this snapshot: availability with its
+	// Routes are the standing shapes of cash_to_trading (into this account),
+	// trading_to_cash (out of it) and, where the realm admits sends,
+	// trading_to_external (to an outside address) at this snapshot: availability with its
 	// reason, inclusive MinimumRaw/MaxRaw, the activation fee and the
 	// network-fee bound, from the same pure quote logic admission re-runs.
 	// Render fee hints and limits from them; quote only for a priced review.
 	Routes []FundingV9WalletRoutePreview `json:"routes"`
+	// Trading is how far the account is from placing orders, from stored
+	// records: prompt Enable trading at state consent_required.
+	Trading FundingV9WalletTradingReadiness `json:"trading"`
+}
+
+// FundingV9WalletTradingReadiness is a trading account's readiness to trade:
+// setup_required, trading_disabled, awaiting_first_credit, consent_required,
+// consented or unavailable. BindingOperationID is the accepted trading
+// authorization behind consented.
+type FundingV9WalletTradingReadiness struct {
+	State              string `json:"state"`
+	BindingOperationID string `json:"bindingOperationId,omitempty"`
 }
 
 // FundingV9WalletRoutePreview is one route's standing shape on a trading
@@ -797,31 +857,35 @@ type FundingV9WalletOperation struct {
 	SetupState            string                `json:"setupState"`
 	FeePayments           []FundingV9FeePayment `json:"feePayments,omitempty"`
 	FundingV9DeferredActivationFee
-	OperationID        string                       `json:"operationId"`
-	RequestID          string                       `json:"requestId,omitempty"`
-	Kind               string                       `json:"kind"`
-	Stage              string                       `json:"stage"`
-	Status             string                       `json:"status"`
-	Attention          string                       `json:"attention,omitempty"`
-	Error              string                       `json:"error,omitempty"`
-	SafeToReviewAgain  bool                         `json:"safeToReviewAgain"`
-	AmountMicro        string                       `json:"amountMicro"`
-	ArrivesMicro       string                       `json:"arrivesMicro"`
-	DebitMicro         string                       `json:"debitMicro"`
-	ActivationFeeMicro string                       `json:"activationFeeMicro"`
-	NetworkFeeMicro    string                       `json:"networkFeeMicro"`
-	From               FundingV9WalletEndpoint      `json:"from"`
-	To                 FundingV9WalletEndpoint      `json:"to"`
-	Steps              []FundingV9MoveStep          `json:"steps"`
-	DebitBooked        bool                         `json:"debitBooked"`
-	CreditBooked       bool                         `json:"creditBooked"`
-	CashLeg            *FundingV9WalletCashLeg      `json:"cashLeg,omitempty"`
-	SetupOperationID   string                       `json:"setupOperationId,omitempty"`
-	SetupDeadline      int64                        `json:"setupDeadline,omitempty"`
-	Requirements       []FundingV9WalletRequirement `json:"requirements"`
-	Settlement         *FundingV9WalletSettlement   `json:"settlement,omitempty"`
-	TxHash             string                       `json:"txHash,omitempty"`
-	CreatedAt          string                       `json:"createdAt"`
+	OperationID        string                  `json:"operationId"`
+	RequestID          string                  `json:"requestId,omitempty"`
+	Kind               string                  `json:"kind"`
+	Stage              string                  `json:"stage"`
+	Status             string                  `json:"status"`
+	Attention          string                  `json:"attention,omitempty"`
+	Error              string                  `json:"error,omitempty"`
+	SafeToReviewAgain  bool                    `json:"safeToReviewAgain"`
+	AmountMicro        string                  `json:"amountMicro"`
+	ArrivesMicro       string                  `json:"arrivesMicro"`
+	DebitMicro         string                  `json:"debitMicro"`
+	ActivationFeeMicro string                  `json:"activationFeeMicro"`
+	NetworkFeeMicro    string                  `json:"networkFeeMicro"`
+	From               FundingV9WalletEndpoint `json:"from"`
+	To                 FundingV9WalletEndpoint `json:"to"`
+	Steps              []FundingV9MoveStep     `json:"steps"`
+	DebitBooked        bool                    `json:"debitBooked"`
+	CreditBooked       bool                    `json:"creditBooked"`
+	CashLeg            *FundingV9WalletCashLeg `json:"cashLeg,omitempty"`
+	SetupOperationID   string                  `json:"setupOperationId,omitempty"`
+	SetupDeadline      int64                   `json:"setupDeadline,omitempty"`
+	// Consent is a send's current owner-signed Move (trading_to_external).
+	// Unsigned and past ExpiresAt with no requirement listed: the send waits
+	// for RenewFundingV9MoveConsent.
+	Consent      *FundingV9MoveConsent        `json:"consent,omitempty"`
+	Requirements []FundingV9WalletRequirement `json:"requirements"`
+	Settlement   *FundingV9WalletSettlement   `json:"settlement,omitempty"`
+	TxHash       string                       `json:"txHash,omitempty"`
+	CreatedAt    string                       `json:"createdAt"`
 }
 
 // FundingV9WalletTotals holds TotalMicro = CashMicro + MovingMicro +
