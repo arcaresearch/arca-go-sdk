@@ -592,6 +592,16 @@ An existing deposit-link action retains the link's recorded adapter across
 realm adapter replacement, including reads, approval retries and signed
 revocations. New links require the current completed realm deployment.
 
+## Credential permission check (Go SDK v2.14.0)
+
+CheckPermissions(ctx, PermissionCheck{Action, Resource}...) reports, for the
+client's realm, whether the credential's policy grants each concrete action
+("arca:PlaceOrder", not an alias or wildcard) on each resource ("*" or a path),
+at most 32 pairs. PermissionCheckResponse.Denied() lists the pairs not granted.
+Policy only: no step-up is consumed, no denial is recorded, and realm gates
+such as V9 trading readiness and step-up still apply to the real request. Call
+it at startup to catch a key missing an action the integration depends on.
+
 ## V9 owner-authorized trading (Go SDK v2.13.0)
 
 ProposeFundingV9Trading(ctx, FundingV9TradingAuthorizationRequest{ArcaID, RequestID,
