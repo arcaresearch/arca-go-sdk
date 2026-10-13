@@ -604,3 +604,8 @@ with GetFundingV9Proposal and StreamFundingV9Operation; never auto-sign or repla
 a replacement. EVM submission is not native approval. Missing native builder
 fee consent returns V9_BUILDER_FEE_CONSENT_REQUIRED; no unsigned fallback occurs.
 Available in Go SDK v2.13.0; requires the corresponding platform deployment and realm enablement.
+An accepted trading consent that expires before nonce reservation or signing
+terminates with safeToReviewAgain=true even if a temporary refusal already
+created a preparation claim. Only that terminal evidence permits a new owner
+review. A possibly reserved or signed original transaction remains recoverable;
+elapsed time alone is never replacement permission.
