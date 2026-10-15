@@ -143,6 +143,15 @@ type FundingV9Operation struct {
 	CreatedAt string `json:"createdAt"`
 	// Move is set on a trading-account move; Kind is its route.
 	Move *FundingV9MoveState `json:"move,omitempty"`
+	// Origin is set on a deposit no owner signed per operation
+	// (standing_route, discovered, receiver). Source, Arrival, ExpiresAt and
+	// SweepOperationID describe a receiver deposit's lifecycle (see
+	// FundingV9WalletOperation).
+	Origin           string                   `json:"origin,omitempty"`
+	Source           *FundingV9DepositSource  `json:"source,omitempty"`
+	Arrival          *FundingV9DepositArrival `json:"arrival,omitempty"`
+	ExpiresAt        int64                    `json:"expiresAt,omitempty"`
+	SweepOperationID string                   `json:"sweepOperationId,omitempty"`
 }
 type FundingV9CoreSnapshot struct {
 	// BeforeEVM identifies native state before that EVM block executes.
@@ -776,6 +785,19 @@ type FundingV9WalletTradingAccount struct {
 	// Trading is how far the account is from placing orders, from stored
 	// records: prompt Enable trading at state consent_required.
 	Trading FundingV9WalletTradingReadiness `json:"trading"`
+	// DepositAddress is the account's own key-free receiving address, null
+	// until issued. USDC sent there is swept into the account's perp balance
+	// by anyone; the deposit shows in Moving and Operations from the first
+	// signal (see FundingV9ExpectedDeposit).
+	DepositAddress *FundingV9WalletDepositAddress `json:"depositAddress"`
+}
+
+// FundingV9WalletDepositAddress is an account's receiving address.
+// PendingMicro is what arrived there and is not swept yet.
+type FundingV9WalletDepositAddress struct {
+	Address      string `json:"address"`
+	Lifecycle    string `json:"lifecycle"`
+	PendingMicro string `json:"pendingMicro"`
 }
 
 // FundingV9WalletTradingReadiness is a trading account's readiness to trade:
@@ -810,7 +832,9 @@ type FundingV9WalletEndpoint struct {
 }
 
 // FundingV9WalletMoving is money in flight: Leg is reserved (still held by
-// the source) or in_transit (left the source, not yet credited).
+// the source), in_transit (left the source, not yet credited) or expected
+// (a deposit a provider confirmed that is not on chain yet; listed, never
+// summed into the totals).
 type FundingV9WalletMoving struct {
 	OperationID string                  `json:"operationId"`
 	Kind        string                  `json:"kind"`
@@ -886,6 +910,90 @@ type FundingV9WalletOperation struct {
 	Settlement   *FundingV9WalletSettlement   `json:"settlement,omitempty"`
 	TxHash       string                       `json:"txHash,omitempty"`
 	CreatedAt    string                       `json:"createdAt"`
+	// Origin is set on a deposit no owner signed per operation:
+	// standing_route, discovered or receiver.
+	Origin string `json:"origin,omitempty"`
+	// A receiver deposit's lifecycle: Source is who sent it as announced
+	// (unifold, blink, external), Arrival the canonical transfer once seen,
+	// ExpiresAt when an expected one expires undelivered, and
+	// SweepOperationID the sweep carrying it from stage accepted on. Stages:
+	// expected, observed, accepted, checking, venue_pending, completed.
+	Source           *FundingV9DepositSource  `json:"source,omitempty"`
+	Arrival          *FundingV9DepositArrival `json:"arrival,omitempty"`
+	ExpiresAt        int64                    `json:"expiresAt,omitempty"`
+	SweepOperationID string                   `json:"sweepOperationId,omitempty"`
+}
+
+// FundingV9DepositSource names where a deposit comes from as the product
+// announced it.
+type FundingV9DepositSource struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference,omitempty"`
+}
+
+// FundingV9DepositArrival is the canonical transfer into the account's
+// deposit address.
+type FundingV9DepositArrival struct {
+	TxHash      string `json:"txHash"`
+	LogIndex    uint   `json:"logIndex"`
+	BlockNumber uint64 `json:"blockNumber"`
+	BlockHash   string `json:"blockHash"`
+	From        string `json:"from"`
+	AmountMicro string `json:"amountMicro"`
+}
+
+// FundingV9ExpectedDeposit announces a deposit a provider (an on-ramp)
+// confirmed before it is on chain. It becomes a `deposit` operation at stage
+// expected on the account, listed in Moving with leg expected, and is
+// matched to the arrival at the account's deposit address. Idempotent on
+// RequestID; AmountMicro may be empty until the provider reports it;
+// ExpiresAt defaults to 24 hours.
+type FundingV9ExpectedDeposit struct {
+	RequestID   string                 `json:"requestId"`
+	ArcaID      string                 `json:"arcaId"`
+	AmountMicro string                 `json:"amountMicro,omitempty"`
+	Source      FundingV9DepositSource `json:"source"`
+	ExpiresAt   int64                  `json:"expiresAt,omitempty"`
+}
+
+// FundingV9ExpectedDepositUpdate patches an expected deposit on a later
+// provider event: a final amount, or a failure that ends it.
+type FundingV9ExpectedDepositUpdate struct {
+	AmountMicro string `json:"amountMicro,omitempty"`
+	Failed      bool   `json:"failed"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// ExpectFundingV9Deposit announces a provider-confirmed deposit into a
+// trading account; arca:ReceiveTo on the account.
+func (a *Arca) ExpectFundingV9Deposit(ctx context.Context, d FundingV9ExpectedDeposit) (FundingV9Operation, error) {
+	var out FundingV9Operation
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	body := struct {
+		RealmID string `json:"realmId"`
+		FundingV9ExpectedDeposit
+	}{realm, d}
+	err = a.client.post(ctx, "/custody/v9/funding/deposits", body, &out)
+	return out, err
+}
+
+// UpdateFundingV9ExpectedDeposit patches an announced deposit by its
+// requestId.
+func (a *Arca) UpdateFundingV9ExpectedDeposit(ctx context.Context, requestID string, u FundingV9ExpectedDepositUpdate) (FundingV9Operation, error) {
+	var out FundingV9Operation
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	body := struct {
+		RealmID string `json:"realmId"`
+		FundingV9ExpectedDepositUpdate
+	}{realm, u}
+	err = a.client.patch(ctx, "/custody/v9/funding/deposits/"+url.PathEscape(requestID), nil, body, &out)
+	return out, err
 }
 
 // FundingV9WalletTotals holds TotalMicro = CashMicro + MovingMicro +
