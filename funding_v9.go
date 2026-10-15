@@ -976,7 +976,7 @@ func (a *Arca) ExpectFundingV9Deposit(ctx context.Context, d FundingV9ExpectedDe
 		RealmID string `json:"realmId"`
 		FundingV9ExpectedDeposit
 	}{realm, d}
-	err = a.client.post(ctx, "/custody/v9/funding/deposits", body, &out)
+	err = a.client.post(ctx, "/custody/v9/funding/expected-deposits", body, &out)
 	return out, err
 }
 
@@ -992,7 +992,7 @@ func (a *Arca) UpdateFundingV9ExpectedDeposit(ctx context.Context, requestID str
 		RealmID string `json:"realmId"`
 		FundingV9ExpectedDepositUpdate
 	}{realm, u}
-	err = a.client.patch(ctx, "/custody/v9/funding/deposits/"+url.PathEscape(requestID), nil, body, &out)
+	err = a.client.patch(ctx, "/custody/v9/funding/expected-deposits/"+url.PathEscape(requestID), nil, body, &out)
 	return out, err
 }
 
