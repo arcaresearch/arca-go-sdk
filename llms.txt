@@ -187,7 +187,7 @@ State(), OnStateChange, Close().
 
 | Method | Stream value |
 |---|---|
-| client.WatchPrices(ctx, *WatchPricesOptions) | map[string]string (+ Get/Prices) |
+| client.WatchPrices(ctx, *WatchPricesOptions) | map[string]string (+ Get/Prices). `Coins` narrows the subscription; the SDK re-sends the union of live subscribers' coins on change and the server (2026-10-16) REPLACES its set on a repeated `subscribe_mids`, so a closed subscriber narrows it on the wire. Empty `Coins` means every market. |
 | client.WatchOperations(ctx, path) | Operation |
 | client.WatchBalances(ctx, path) | BalanceUpdate |
 | client.WatchObject(ctx, path) | ObjectValuation |
