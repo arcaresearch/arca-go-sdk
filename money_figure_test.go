@@ -128,6 +128,9 @@ func TestWalletMoneyEveryDollarVisibleOnceAtEveryStage(t *testing.T) {
 	if *failed.Cash.AvailableMicro != "28510000" || len(failed.Cash.Departing) != 0 {
 		t.Fatalf("failed: %+v", failed.Cash)
 	}
+	if c := failed.Cash.Change; c == nil || c.OperationStatus != "failed" || c.Retired == nil || c.Retired.Direction != MoneyOutgoing {
+		t.Fatalf("a released reservation is not money sent: %+v", c)
+	}
 	compensated := ComposeWalletMoney(loadWalletMoneyFixture(t, "06-move-compensated"), ComposeWalletMoneyOptions{Previous: &inTransit})
 	if *compensated.Cash.SettledMicro != "28500000" || compensated.Cash.Change == nil || compensated.Cash.Change.DeltaMicro != "5000000" {
 		t.Fatalf("compensated: %+v", compensated.Cash)
@@ -146,6 +149,9 @@ func TestWalletMoneyBoundaryCrossingLegsDepositsAndSends(t *testing.T) {
 	landed := ComposeWalletMoney(loadWalletMoneyFixture(t, "09-deposit-landed"), ComposeWalletMoneyOptions{Previous: &observed})
 	if got := landed.Account("obj_hl2"); *got.SettledMicro != "3000000" || len(got.Arriving) != 0 || got.Change == nil || got.Change.Cause.OperationID != "opr_dep1" {
 		t.Fatalf("landed deposit: %+v", got)
+	}
+	if c := landed.Total.Change; c == nil || c.DeltaMicro != "0" || c.Retired == nil || c.Retired.AmountMicro != "2000000" || c.Retired.Direction != MoneyIncoming || c.OperationStatus != "succeeded" {
+		t.Fatalf("the total names the leg that landed: %+v", c)
 	}
 	sendReserved := ComposeWalletMoney(loadWalletMoneyFixture(t, "10-send-reserved"), ComposeWalletMoneyOptions{})
 	sendInTransit := ComposeWalletMoney(loadWalletMoneyFixture(t, "11-send-in-transit"), ComposeWalletMoneyOptions{Previous: &sendReserved})

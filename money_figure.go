@@ -98,11 +98,18 @@ type MoneyChangeCause struct {
 }
 
 // MoneyChange is why a figure last moved, named only when the frame makes
-// it attributable. DeltaMicro is a caption, never a figure.
+// it attributable. DeltaMicro is a caption, never a figure. Retired is the
+// leg of the named operation this frame no longer lists (it landed, left or
+// was released), so a caption can name the amount even when the figure did
+// not move; OperationStatus is the named operation's status in this frame
+// (pending, succeeded, failed), so a retired leg reads as received or sent
+// only when the operation succeeded.
 type MoneyChange struct {
-	Cause      MoneyChangeCause `json:"cause"`
-	DeltaMicro string           `json:"deltaMicro"`
-	Sequence   uint64           `json:"sequence"`
+	Cause           MoneyChangeCause `json:"cause"`
+	DeltaMicro      string           `json:"deltaMicro"`
+	Sequence        uint64           `json:"sequence"`
+	Retired         *MoneyLeg        `json:"retired,omitempty"`
+	OperationStatus string           `json:"operationStatus,omitempty"`
 }
 
 // MoneyFigureKind is which snapshot figure a MoneyFigure renders.
@@ -268,9 +275,9 @@ func ComposeWalletMoney(snapshot FundingV9WalletSnapshot, opts ComposeWalletMone
 	settled := snapshot.Cash.Balances.ConfirmedMicro
 	available := snapshot.Cash.Balances.AvailableMicro
 	cash := MoneyFigure{Kind: MoneyFigureCash, SettledMicro: &settled, AvailableMicro: &available,
-		Arriving: append(append([]MoneyLeg{}, legs.cash.arriving...), cashLegs.arriving...),
+		Arriving:  append(append([]MoneyLeg{}, legs.cash.arriving...), cashLegs.arriving...),
 		Departing: append(append([]MoneyLeg{}, legs.cash.departing...), cashLegs.departing...),
-		AsOf: snapshot.Cash.Balances.AsOf.Time, Current: snapshot.Cash.WalletState != "unavailable", Source: "cash"}
+		AsOf:      snapshot.Cash.Balances.AsOf.Time, Current: snapshot.Cash.WalletState != "unavailable", Source: "cash"}
 
 	accounts := map[string]MoneyFigure{}
 	var order []string
@@ -301,9 +308,9 @@ func ComposeWalletMoney(snapshot FundingV9WalletSnapshot, opts ComposeWalletMone
 
 	totalMicro := snapshot.Totals.TotalMicro
 	total := MoneyFigure{Kind: MoneyFigureTotal, SettledMicro: &totalMicro,
-		Arriving: append(append([]MoneyLeg{}, legs.total.arriving...), cashLegs.arriving...),
+		Arriving:  append(append([]MoneyLeg{}, legs.total.arriving...), cashLegs.arriving...),
 		Departing: append(append([]MoneyLeg{}, legs.total.departing...), cashLegs.departing...),
-		AsOf: snapshot.ComposedAt, Current: snapshot.Totals.Current, Source: "totals"}
+		AsOf:      snapshot.ComposedAt, Current: snapshot.Totals.Current, Source: "totals"}
 
 	framed := map[string]bool{}
 	for _, op := range snapshot.Operations {
@@ -562,15 +569,15 @@ func moneyChange(previous *MoneyFigure, figure MoneyFigure, snapshot FundingV9Wa
 			delta, hasDelta = d, true
 		}
 	}
-	cause := moneyOperationThatMoved(figure, previous, snapshot, previousMoney)
+	moved := moneyOperationThatMoved(figure, previous, snapshot, previousMoney)
 	if !hasDelta {
-		if cause == nil {
+		if moved == nil {
 			return nil
 		}
-		return &MoneyChange{Cause: *cause, DeltaMicro: "0", Sequence: sequence}
+		return &MoneyChange{Cause: moved.cause, DeltaMicro: "0", Sequence: sequence, Retired: moved.retired, OperationStatus: moved.status}
 	}
-	if cause != nil {
-		return &MoneyChange{Cause: *cause, DeltaMicro: delta, Sequence: sequence}
+	if moved != nil {
+		return &MoneyChange{Cause: moved.cause, DeltaMicro: delta, Sequence: sequence, Retired: moved.retired, OperationStatus: moved.status}
 	}
 	if delta == "0" {
 		return nil
@@ -602,7 +609,13 @@ func moneyTouches(op FundingV9WalletOperation, figure MoneyFigure, snapshot Fund
 	return false
 }
 
-func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot FundingV9WalletSnapshot, previousMoney *WalletMoney) *MoneyChangeCause {
+type moneyMoved struct {
+	cause   MoneyChangeCause
+	retired *MoneyLeg
+	status  string
+}
+
+func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot FundingV9WalletSnapshot, previousMoney *WalletMoney) *moneyMoved {
 	nowLegs := map[string]MoneyLeg{}
 	for _, leg := range append(append([]MoneyLeg{}, figure.Arriving...), figure.Departing...) {
 		nowLegs[leg.ID()] = leg
@@ -615,6 +628,7 @@ func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot
 	}
 	type touched struct{ id, kind string }
 	var hits []touched
+	retired := map[string]MoneyLeg{}
 	// Deterministic order: current legs in figure order, then retired legs.
 	for _, leg := range append(append([]MoneyLeg{}, figure.Arriving...), figure.Departing...) {
 		if before, ok := beforeLegs[leg.ID()]; !ok || before.Stage != leg.Stage {
@@ -625,6 +639,7 @@ func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot
 		for _, leg := range append(append([]MoneyLeg{}, previous.Arriving...), previous.Departing...) {
 			if _, ok := nowLegs[leg.ID()]; !ok {
 				hits = append(hits, touched{leg.OperationID, leg.Kind})
+				retired[leg.OperationID] = leg
 			}
 		}
 	}
@@ -641,6 +656,7 @@ func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot
 			hits = append(hits, touched{op.OperationID, op.Kind})
 		}
 	}
+	cashStatus := map[string]string{}
 	if figure.Kind == MoneyFigureCash || figure.Kind == MoneyFigureTotal {
 		beforeCash := map[string]CashV9WalletOperation{}
 		for _, op := range previousMoney.Snapshot.Cash.Operations {
@@ -649,13 +665,31 @@ func moneyOperationThatMoved(figure MoneyFigure, previous *MoneyFigure, snapshot
 		for _, op := range snapshot.Cash.Operations {
 			if old, ok := beforeCash[op.ID]; (!ok || old.State != op.State) && (op.Kind == "send" || figure.Kind == MoneyFigureCash) {
 				hits = append(hits, touched{op.ID, op.Kind})
+				switch op.State {
+				case "completed":
+					cashStatus[op.ID] = "succeeded"
+				case "failed":
+					cashStatus[op.ID] = "failed"
+				default:
+					cashStatus[op.ID] = "pending"
+				}
 			}
 		}
 	}
 	if len(hits) == 0 {
 		return nil
 	}
-	return &MoneyChangeCause{OperationID: hits[0].id, OperationKind: hits[0].kind}
+	out := &moneyMoved{cause: MoneyChangeCause{OperationID: hits[0].id, OperationKind: hits[0].kind}, status: cashStatus[hits[0].id]}
+	if leg, ok := retired[hits[0].id]; ok {
+		l := leg
+		out.retired = &l
+	}
+	for _, op := range snapshot.Operations {
+		if op.OperationID == hits[0].id {
+			out.status = op.Status
+		}
+	}
+	return out
 }
 
 // Integer arithmetic on micro-USDC strings for captions and diagnostics. A
