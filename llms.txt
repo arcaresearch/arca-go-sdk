@@ -614,7 +614,11 @@ signatures. GetFundingV9TradingStatus reads current account/owner/native-agent
 readiness. The configured realm must enable trading. JWT PlaceOrder/CancelOrder
 permissions alone do not replace custody consent. Recover uncertain submission
 with GetFundingV9Proposal and StreamFundingV9Operation; never auto-sign or replay
-a replacement. EVM submission is not native approval. Missing native builder
+a replacement. EVM submission is not native approval. New agent authorizations
+also enable and verify unified collateral before completing; follow the original
+operation stream while that setup is pending. Builder-fee-only authorization
+does not change account mode, and existing completed bindings are not migrated.
+This behavior requires the corresponding platform deployment. Missing native builder
 fee consent returns V9_BUILDER_FEE_CONSENT_REQUIRED; no unsigned fallback occurs.
 Available in Go SDK v2.13.0; requires the corresponding platform deployment and realm enablement.
 An accepted trading consent that expires before nonce reservation or signing
