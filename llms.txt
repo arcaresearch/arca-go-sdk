@@ -364,7 +364,9 @@ AmountMicro, exactly one of Destination / DestinationCashObjectID), and the
 relay-executed enable_automatic_deposits, revoke_automatic_deposits and
 source_send (PrivyObjectID + SourceWalletID = a verified provider wallet at the
 Cash owner's address, CashObjectID; source_send adds AmountMicro + Destination;
-route actions may name DepositLinkID). An activation returns TWO requirements,
+route actions may name DepositLinkID; revoke_automatic_deposits also accepts a
+deleted provider object and an unlinked wallet, so a route can always be turned
+off). An activation returns TWO requirements,
 req_route and req_permit, answered separately; its operation exists only once
 both are stored. A realm with no execution relay answers the relay-executed
 kinds with limitation unsupported_action.
