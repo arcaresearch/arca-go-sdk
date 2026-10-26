@@ -38,7 +38,8 @@ type CashV9Operation struct {
 	Error     string `json:"error,omitempty"`
 	// Reason is the bounded failure code when Status is "failed":
 	// consent_expired, reverted, rejected, destination_refused,
-	// recovery_started, cancelled or unknown. Error stays operator text.
+	// recovery_started, cancelled, source_changed or unknown. Error stays
+	// operator text.
 	Reason string `json:"reason,omitempty"`
 }
 type CashV9Account struct {
@@ -182,11 +183,16 @@ type CashV9WalletSource struct {
 }
 
 // CashV9WalletAutoDeposit is the automatic-deposit route state; nil until
-// Arca observes it (Wallet Account stream, step 08).
+// Arca observes it (Wallet Account stream, step 08). HeldMicro is source
+// money an active route will not forward now, and HeldReason says why
+// (below_minimum, cash_limit or link_revoked); both are omitted when nothing
+// is held. Held money is not part of balances.pendingInMicro.
 type CashV9WalletAutoDeposit struct {
 	State          string     `json:"state"`
 	RouteID        string     `json:"routeId,omitempty"`
 	AllowanceMicro string     `json:"allowanceMicro,omitempty"`
+	HeldMicro      string     `json:"heldMicro,omitempty"`
+	HeldReason     string     `json:"heldReason,omitempty"`
 	AsOf           CashV9AsOf `json:"asOf"`
 }
 

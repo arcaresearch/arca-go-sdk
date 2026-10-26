@@ -90,7 +90,7 @@ func TestCashV9WalletAccountDecodesFixtures(t *testing.T) {
 	if err := json.Unmarshal(raw, &vocabulary); err != nil {
 		t.Fatal(err)
 	}
-	if len(vocabulary.WalletStates) != 5 || len(vocabulary.OperationStates) != 6 || len(vocabulary.Reasons) != 7 {
+	if len(vocabulary.WalletStates) != 5 || len(vocabulary.OperationStates) != 6 || len(vocabulary.Reasons) != 8 {
 		t.Fatalf("vocabulary changed size: %+v", vocabulary)
 	}
 }
