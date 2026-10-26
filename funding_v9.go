@@ -114,6 +114,9 @@ type FundingV9SourceDebitEvidence struct {
 	SourceAddress      string `json:"sourceAddress"`
 	Amount             string `json:"amount"`
 	AuthorizationNonce string `json:"authorizationNonce"`
+	// BlockTime is the HyperEVM block's header time (unix seconds), set on
+	// discovered credits.
+	BlockTime uint64 `json:"blockTime,omitempty"`
 }
 type FundingV9Operation struct {
 	Requirements        []FundingV9WalletRequirement  `json:"requirements"`
