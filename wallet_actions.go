@@ -37,9 +37,10 @@ type WalletRequestedAction struct {
 	Destination             string `json:"destination,omitempty"`
 	DestinationCashObjectID string `json:"destinationCashObjectId,omitempty"`
 	DepositLinkID           string `json:"depositLinkId,omitempty"`
-	// TradingObjectID, on enable_automatic_deposits, routes the source into
-	// that trading account through the trading deposit adapter instead of
-	// into Cash. CashObjectID still names the owner's Cash account.
+	// TradingObjectID, on enable_automatic_deposits or
+	// revoke_automatic_deposits, makes the route the trading deposit
+	// adapter's, into that trading account, instead of the Cash adapter's.
+	// CashObjectID still names the owner's Cash account.
 	TradingObjectID string `json:"tradingObjectId,omitempty"`
 	// Reference, on a send, is the product's opaque correlation string (for
 	// example a payout provider's reference): at most 128 printable

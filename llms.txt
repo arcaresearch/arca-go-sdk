@@ -83,7 +83,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Create info object | client.EnsureInfo(ctx, EnsureInfoOptions{Ref, Labels}) |
 | Create a Privy provider object (any path; holds no balance, grants no authority) | client.EnsureProvider(ctx, EnsureProviderOptions{Ref}) |
 | Prove its Privy user and wallets | client.ConnectProvider(ctx, objectID, ConnectProviderOptions{Evidence: ProviderEvidence{Kind: ProviderEvidenceKindPrivyIdentityToken, IdentityToken}, Wallets}) → ProviderDetail (PROVIDER_EVIDENCE_INVALID details.reason expired|invalid; 503 SERVICE_UNAVAILABLE = Privy keys unfetchable, retry); GetProvider; UpdateProviderWallet(ctx, objectID, walletID, UpdateProviderWalletOptions{Role, Controls}) |
-| Link a wallet (must be the Cash owner address) to a Cash account | client.CreateDepositLink(ctx, CreateDepositLinkOptions{RequestID, SourceObjectID, SourceWalletID, DestinationObjectID, Adapter}) → DepositLink{Requested, Observed (DepositRoute*; Unknown/Unwatched are never revoked), Operations, Progress}; GetDepositLink / ListDepositLinks(objectID) / RevokeDepositLink(id, requestID) (records the request only). Errors: DEPOSIT_LINK_OWNER_MISMATCH, DEPOSIT_LINK_SOURCE_CONFLICT |
+| Link a wallet (must be the account owner address) to a Cash account, or a trading account through the realm's trading adapter | client.CreateDepositLink(ctx, CreateDepositLinkOptions{RequestID, SourceObjectID, SourceWalletID (pick from ProviderDetail.Wallets by Role, never by index), DestinationObjectID, Adapter}) → DepositLink{Requested, Observed (DepositRoute*; Unknown/Unwatched are never revoked), Operations, Progress}; GetDepositLink / ListDepositLinks(objectID) / RevokeDepositLink(id, requestID) (records the request only). Errors: DEPOSIT_LINK_OWNER_MISMATCH, DEPOSIT_LINK_SOURCE_CONFLICT (details.conflictingLinkId), DEPOSIT_LINK_SOURCE_CAPACITY (details.limit) |
 | Delete object | client.EnsureDeleted(ctx, EnsureDeletedOptions{Ref}) |
 | Get object | client.GetObject(ctx, path) / GetObjectDetail(ctx, id) |
 | List objects | client.ListObjects(ctx, *ListObjectsOptions) |
@@ -364,9 +364,10 @@ AmountMicro, exactly one of Destination / DestinationCashObjectID), and the
 relay-executed enable_automatic_deposits, revoke_automatic_deposits and
 source_send (PrivyObjectID + SourceWalletID = a verified provider wallet at the
 Cash owner's address, CashObjectID; source_send adds AmountMicro + Destination;
-route actions may name DepositLinkID; revoke_automatic_deposits also accepts a
-deleted provider object and an unlinked wallet, so a route can always be turned
-off). An activation returns TWO requirements,
+route actions may name DepositLinkID, and TradingObjectID makes them the trading
+adapter's route into that trading account; revoke_automatic_deposits also
+accepts a deleted provider object and an unlinked wallet, so a route can always
+be turned off). An activation returns TWO requirements,
 req_route and req_permit, answered separately; its operation exists only once
 both are stored. A realm with no execution relay answers the relay-executed
 kinds with limitation unsupported_action.
@@ -604,8 +605,11 @@ money as stale across incomplete/error frames. Wallet mutations are single-send;
 resolve uncertain outcomes using the original operation/request identity.
 Deposit links accept optional `maxCashMicro`, `maxDepositMicro` and `minDepositMicro`
 product limits; admission preserves partial deposits and leaves the remainder at
-source, and holds a source balance below the minimum there (no sweep, no
-reservation) until arrivals add up to it.
+source, and holds a forward below the minimum (after the caps) there (no sweep,
+no reservation) until arrivals add up to it. The Wallet Account reports what
+stays as AutoDeposit.HeldMicro with HeldReason (below_minimum, cash_limit,
+link_revoked); Balances.PendingInMicro counts only what will be forwarded. A
+forward the source can no longer cover fails with reason source_changed.
 These stream options and deposit limits are published in Go SDK v2.12.0;
 SDK publication alone does not enable owned execution in a deployed realm.
 An existing deposit-link action retains the link's recorded adapter across
