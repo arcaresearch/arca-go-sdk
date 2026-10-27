@@ -651,3 +651,16 @@ terminates with safeToReviewAgain=true even if a temporary refusal already
 created a preparation claim. Only that terminal evidence permits a new owner
 review. A possibly reserved or signed original transaction remains recoverable;
 elapsed time alone is never replacement permission.
+
+## Historical candle coverage (requires matching backend deployment)
+
+`candleHistory.earliestMs` is the earliest stored daily row, not a registry listing year.
+`hlEarliestMs` includes only recognized native provenance; zero means none is known.
+Negative epoch milliseconds are valid. These bounds do not prove uninterrupted coverage.
+For All/Max, traverse bounded daily windows to the observed lower bound, retain source
+metadata, keep reference sessions entirely before native coverage, and maintain the live
+SDK chart subscription separately. Explicit REST `1d` windows of at most 1,500 days with
+`skipBackfill=true` read durable storage and return an error when it is unavailable.
+CDN-enabled SDK reads can bypass REST; archive reconciliation must use a REST-only
+configuration. Do not interpret a failed page or an unknown bound as end-of-history.
+Historical CDN files published before the source-preserving worker fix may need repair.
