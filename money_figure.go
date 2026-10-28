@@ -381,7 +381,13 @@ type moneyLegsByEndT struct {
 }
 
 func moneyCounterparty(endpoint FundingV9WalletEndpoint, snapshot FundingV9WalletSnapshot) MoneyCounterparty {
-	if endpoint.Kind == "cash" || (endpoint.BoundaryID != "" && snapshot.BoundaryID != "" && endpoint.BoundaryID == snapshot.BoundaryID) {
+	if endpoint.Kind == "cash" {
+		// Only an unqualified local-prediction sentinel implies this wallet.
+		for _, identity := range [][2]string{{endpoint.BoundaryID, snapshot.BoundaryID}, {endpoint.ArcaID, snapshot.CashTarget.ArcaID}, {endpoint.ArcaPath, snapshot.CashTarget.ArcaPath}} {
+			if identity[0] != "" && identity[0] != identity[1] {
+				return MoneyCounterparty{Kind: MoneyCounterpartyExternal, Address: endpoint.Address}
+			}
+		}
 		return MoneyCounterparty{Kind: MoneyCounterpartyCash}
 	}
 	if endpoint.ArcaID != "" {

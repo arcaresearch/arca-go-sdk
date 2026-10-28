@@ -18,6 +18,24 @@ import (
 
 const walletMoneyFixtures = "../../backend/libs/arca-go/fundingv9/testdata/wallet-money"
 
+func TestPersonSendDoesNotArriveInSendersCash(t *testing.T) {
+	var previous *WalletMoney
+	for _, name := range []string{"19-person-send-reserved", "20-person-send-in-transit", "21-person-send-paid"} {
+		money := ComposeWalletMoney(loadWalletMoneyFixture(t, name), ComposeWalletMoneyOptions{Previous: previous})
+		if len(money.Cash.Arriving) != 0 || len(money.Cash.Departing) != 0 || money.Cash.Change != nil {
+			t.Fatalf("%s: recipient Cash touched sender Cash: %+v", name, money.Cash)
+		}
+		if name != "21-person-send-paid" {
+			if len(money.Total.Departing) != 1 || len(money.Account("obj_hl1").Departing) != 1 || money.Total.Departing[0].Counterparty.Kind != MoneyCounterpartyExternal {
+				t.Fatalf("%s: person send must leave sender wallet: %+v", name, money.Total)
+			}
+		} else if len(money.Total.Departing) != 0 || money.Total.Change == nil || money.Total.Change.OperationStatus != "succeeded" {
+			t.Fatalf("completed payment did not retire: %+v", money.Total)
+		}
+		previous = &money
+	}
+}
+
 func loadWalletMoneyFixture(t *testing.T, name string) FundingV9WalletSnapshot {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(walletMoneyFixtures, name+".json"))
