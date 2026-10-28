@@ -268,6 +268,11 @@ RealmEvent.Deposit (*DetectedDeposit) carries it. Chain truth, not ledger truth
 Aggregation sources: arca.NewPrefixSource(p), NewPathsSource(paths),
 NewPatternSource(p), NewWatchSource(id).
 
+WatchAggregation creates its watch on the socket (create_aggregation_watch).
+The server answers within 8 s: a create it cannot finish in time, or one past
+16 outstanding on the connection, returns the server's error for that call
+only; the socket stays open.
+
 Lower-level access: client.WS() returns *WebSocketManager (On(type, cb),
 typed OnX listeners, OnGap, OnAuthenticated, OnRotated, EnsureConnected,
 RotateConnection, Disconnect).
