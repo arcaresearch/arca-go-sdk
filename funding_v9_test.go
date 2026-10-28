@@ -100,6 +100,44 @@ func TestFundingV9DeclareAndUpdateAccount(t *testing.T) {
 	}
 }
 
+func TestFundingV9DepositSignalCarriesReferencesAndReturnsTheOperationOrParked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/custody/v9/funding/deposit-signals" {
+			t.Error("unexpected endpoint", r.Method, r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		var req struct {
+			RealmID string `json:"realmId"`
+			FundingV9DepositSignal
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.RealmID != "realm" || len(req.References) != 1 || req.References[0] != (FundingV9DepositReference{Kind: FundingV9DepositRefStripeSession, Value: "cos_1"}) {
+			t.Error("signal changed", req)
+		}
+		if req.ArcaID == "" {
+			fmt.Fprint(w, `{"success":true,"data":{"parked":true}}`)
+			return
+		}
+		if req.Assurance != FundingV9DepositDeclared || len(req.Expects) != 1 || req.Expects[0] != FundingV9DepositRefUnifoldExecution {
+			t.Error("declaration changed", req)
+		}
+		fmt.Fprint(w, `{"success":true,"data":{"parked":false,"operation":{"operationId":"opr_d","kind":"deposit","stage":"declared","status":"pending","origin":"receiver","assurance":"declared","references":[{"kind":"stripe_session","value":"cos_1"}],"expects":["unifold_execution"],"source":{"kind":"stripe"}}}}`)
+	}))
+	defer srv.Close()
+	a := &Arca{client: newHTTPClient(clientConfig{baseURL: srv.URL + "/api/v1", credential: "fixture"}), resolvedRealmID: "realm"}
+	ctx := context.Background()
+	ref := []FundingV9DepositReference{{Kind: FundingV9DepositRefStripeSession, Value: "cos_1"}}
+	parked, err := a.SignalFundingV9Deposit(ctx, FundingV9DepositSignal{References: ref, Assurance: FundingV9DepositConfirmed, AmountMicro: "5000000"})
+	if err != nil || !parked.Parked || parked.Operation != nil {
+		t.Fatal(parked, err)
+	}
+	declared, err := a.SignalFundingV9Deposit(ctx, FundingV9DepositSignal{ArcaID: "obj_cash", References: ref, Expects: []string{FundingV9DepositRefUnifoldExecution}, Assurance: FundingV9DepositDeclared})
+	if err != nil || declared.Parked || declared.Operation == nil || declared.Operation.Stage != "declared" || declared.Operation.Assurance != FundingV9DepositDeclared || len(declared.Operation.References) != 1 {
+		t.Fatal(declared, err)
+	}
+}
+
 func TestFundingMoveQuoteCreateAndRead(t *testing.T) {
 	creates := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -155,6 +155,17 @@ type FundingV9Operation struct {
 	Arrival          *FundingV9DepositArrival `json:"arrival,omitempty"`
 	ExpiresAt        int64                    `json:"expiresAt,omitempty"`
 	SweepOperationID string                   `json:"sweepOperationId,omitempty"`
+	// A receiver deposit's intent: how far its announcement can be trusted
+	// (declared, claimed, confirmed), every reference a pathway knows it by,
+	// and the reference kinds a later leg brings. MergedInto names the
+	// operation a duplicate was folded into; RevivedBy the one that took over
+	// an ended deposit. Both hide this one from the wallet.
+	IntentID   string                      `json:"intentId,omitempty"`
+	Assurance  string                      `json:"assurance,omitempty"`
+	References []FundingV9DepositReference `json:"references,omitempty"`
+	Expects    []string                    `json:"expects,omitempty"`
+	MergedInto string                      `json:"mergedInto,omitempty"`
+	RevivedBy  string                      `json:"revivedBy,omitempty"`
 }
 type FundingV9CoreSnapshot struct {
 	// BeforeEVM identifies native state before that EVM block executes.
@@ -917,10 +928,12 @@ type FundingV9WalletOperation struct {
 	// standing_route, discovered or receiver.
 	Origin string `json:"origin,omitempty"`
 	// A receiver deposit's lifecycle: Source is who sent it as announced
-	// (unifold, blink, external), Arrival the canonical transfer once seen,
-	// ExpiresAt when an expected one expires undelivered, and
-	// SweepOperationID the sweep carrying it from stage accepted on. Stages:
-	// expected, observed, accepted, checking, venue_pending, completed.
+	// (stripe, coinbase, unifold, blink, external), Arrival the canonical
+	// transfer once seen, ExpiresAt when an expected one expires undelivered,
+	// and SweepOperationID the sweep carrying it from stage accepted on.
+	// Stages: expected, observed, accepted, checking, venue_pending,
+	// completed; a Cash deposit goes from observed to completed. Declared,
+	// lapsed and merged deposits are never listed.
 	Source           *FundingV9DepositSource  `json:"source,omitempty"`
 	Arrival          *FundingV9DepositArrival `json:"arrival,omitempty"`
 	ExpiresAt        int64                    `json:"expiresAt,omitempty"`
@@ -967,8 +980,82 @@ type FundingV9ExpectedDepositUpdate struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
+// Deposit reference kinds (FundingV9DepositReference.Kind).
+const (
+	FundingV9DepositRefStripeSession    = "stripe_session"
+	FundingV9DepositRefCoinbaseOrder    = "coinbase_order"
+	FundingV9DepositRefUnifoldExecution = "unifold_execution"
+	FundingV9DepositRefBlinkLink        = "blink_link"
+	FundingV9DepositRefSourceTx         = "source_tx"
+	FundingV9DepositRefArrivalTx        = "arrival_tx"
+	FundingV9DepositRefRequest          = "request"
+)
+
+// Deposit signal assurance: declared (hidden until confirmed), claimed (an
+// unsigned client signal; expires without attention), confirmed (a provider
+// the builder holds a signed relationship with; expires with attention).
+const (
+	FundingV9DepositDeclared  = "declared"
+	FundingV9DepositClaimed   = "claimed"
+	FundingV9DepositConfirmed = "confirmed"
+)
+
+// FundingV9DepositReference is one identifier a pathway knows a deposit by.
+type FundingV9DepositReference struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+// FundingV9DepositSignal is what a deposit pathway knows about one deposit
+// at one moment. Signals are idempotent and order-independent: every
+// reference one signal names is the same deposit, and Arca resolves all of
+// them to one `deposit` operation on the account (a trading account or a
+// Cash account with an active deposit address). ArcaID is required on a
+// declaration and may be omitted when a reference is already known; a
+// confirmed signal naming neither is parked for an hour until a
+// declaration names one of its references. Expects lists reference kinds a
+// later leg brings (a Stripe session paid out through Unifold expects
+// unifold_execution). ExpiresAt is a Unix time within 7 days.
+type FundingV9DepositSignal struct {
+	ArcaID      string                      `json:"arcaId,omitempty"`
+	References  []FundingV9DepositReference `json:"references"`
+	Expects     []string                    `json:"expects,omitempty"`
+	Assurance   string                      `json:"assurance"`
+	Source      *FundingV9DepositSource     `json:"source,omitempty"`
+	AmountMicro string                      `json:"amountMicro,omitempty"`
+	Failed      bool                        `json:"failed,omitempty"`
+	Reason      string                      `json:"reason,omitempty"`
+	ExpiresAt   int64                       `json:"expiresAt,omitempty"`
+}
+
+// FundingV9DepositSignalOutcome is the operation showing the deposit a
+// signal resolved to, or Parked when it waits for a declaration.
+type FundingV9DepositSignalOutcome struct {
+	Parked    bool                `json:"parked"`
+	Operation *FundingV9Operation `json:"operation,omitempty"`
+}
+
+// SignalFundingV9Deposit sends a deposit signal; arca:ReceiveTo on the
+// account the deposit is recorded on (at the realm root for a signal that
+// names no account and no known reference).
+func (a *Arca) SignalFundingV9Deposit(ctx context.Context, s FundingV9DepositSignal) (FundingV9DepositSignalOutcome, error) {
+	var out FundingV9DepositSignalOutcome
+	realm, err := a.realmID(ctx)
+	if err != nil {
+		return out, err
+	}
+	body := struct {
+		RealmID string `json:"realmId"`
+		FundingV9DepositSignal
+	}{realm, s}
+	err = a.client.post(ctx, "/custody/v9/funding/deposit-signals", body, &out)
+	return out, err
+}
+
 // ExpectFundingV9Deposit announces a provider-confirmed deposit into a
-// trading account; arca:ReceiveTo on the account.
+// trading account or a Cash account with an active deposit address: a
+// confirmed deposit signal with a `request` reference. arca:ReceiveTo on the
+// account.
 func (a *Arca) ExpectFundingV9Deposit(ctx context.Context, d FundingV9ExpectedDeposit) (FundingV9Operation, error) {
 	var out FundingV9Operation
 	realm, err := a.realmID(ctx)

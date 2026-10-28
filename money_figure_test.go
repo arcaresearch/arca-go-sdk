@@ -43,7 +43,7 @@ func TestWalletMoneyFiguresAreArcasFiguresVerbatim(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	if len(names) < 17 {
+	if len(names) < 19 {
 		t.Fatalf("fixture set shrank: %d", len(names))
 	}
 	for _, name := range names {
@@ -171,6 +171,23 @@ func TestWalletMoneyBoundaryCrossingLegsDepositsAndSends(t *testing.T) {
 	}
 	if len(cash.Cash.Arriving) != 1 || cash.Cash.Arriving[0].AmountMicro != "750000" || len(cash.Total.Arriving) != 1 || len(cash.Total.Departing) != 1 {
 		t.Fatalf("Cash pending in: %+v %+v", cash.Cash.Arriving, cash.Total)
+	}
+}
+
+func TestWalletMoneyCashDepositIsExpectedThenPendingInOnce(t *testing.T) {
+	expected := ComposeWalletMoney(loadWalletMoneyFixture(t, "17-cash-deposit-expected"), ComposeWalletMoneyOptions{})
+	if len(expected.Cash.Arriving) != 1 || expected.Cash.Arriving[0].Stage != MoneyLegExpected || expected.Cash.Arriving[0].Counterparty != (MoneyCounterparty{Kind: MoneyCounterpartyExternal}) {
+		t.Fatalf("an announced Cash deposit is listed on Cash: %+v", expected.Cash.Arriving)
+	}
+	if expected.Cash.ExpectedMicro() != "3000000" || expected.Cash.ArrivingMicro() != "0" || expected.Cash.InMotion() || *expected.Total.SettledMicro != "30920000" {
+		t.Fatalf("expected is listed, never counted: %+v", expected.Cash)
+	}
+	onChain := ComposeWalletMoney(loadWalletMoneyFixture(t, "18-cash-deposit-pending-in"), ComposeWalletMoneyOptions{Previous: &expected})
+	if len(onChain.Cash.Arriving) != 1 || onChain.Cash.Arriving[0].Stage != MoneyLegInTransit || onChain.Cash.ArrivingMicro() != "3000000" || onChain.Cash.ExpectedMicro() != "0" {
+		t.Fatalf("the deposit on chain is Cash's pending figure alone: %+v", onChain.Cash.Arriving)
+	}
+	if len(onChain.Total.Arriving) != 1 || onChain.Total.Arriving[0].AmountMicro != "3000000" || *onChain.Total.SettledMicro != "30920000" {
+		t.Fatalf("total: %+v", onChain.Total)
 	}
 }
 

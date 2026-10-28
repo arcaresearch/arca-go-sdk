@@ -1,5 +1,26 @@
 # Arca Go SDK — AI Context
 
+## Deposit intents
+
+After the corresponding platform deployment, `SignalFundingV9Deposit(ctx,
+FundingV9DepositSignal)` (`POST /custody/v9/funding/deposit-signals`) tells
+Arca what a deposit pathway knows about one deposit, in any order: References
+(`FundingV9DepositRef*`: stripe_session, coinbase_order, unifold_execution,
+blink_link, source_tx, arrival_tx, request), Assurance
+(`FundingV9DepositDeclared` = registered before payment, never shown;
+`FundingV9DepositClaimed` = unsigned client signal; `FundingV9DepositConfirmed`
+= a signed provider), optional ArcaID, Expects, AmountMicro, Failed/Reason,
+ExpiresAt. It returns `FundingV9DepositSignalOutcome{Parked, Operation}`; a
+signal naming no account and no known reference (a provider webhook before
+the app's registration) is parked for an hour until a declaration names one
+of its references. Arca keeps one `deposit` operation per deposit and ends it
+in exactly one of completed, failed, expired, lapsed or merged. Needs
+`arca:ReceiveTo` on the account. `ExpectFundingV9Deposit` is unchanged (a
+confirmed `request` signal). Wallet snapshots list a claimed or confirmed
+deposit as an `expected` leg on trading accounts and on Cash; `From.Kind`
+names the pathway. A Cash deposit on chain leaves Moving and is in
+`Cash.Balances.PendingInMicro` alone; `ComposeWalletMoney` needs no change.
+
 ## V9 exchange capabilities before authorization
 
 After the corresponding platform deployment, `GET /objects/{id}/exchange/capabilities`
@@ -12,6 +33,15 @@ Keep confirmed capabilities account-scoped and reject late responses after switc
 ## Trading payments to another owner’s Cash
 
 After the corresponding platform deployment, `trading_to_cash` may name another owner’s Cash object with `fromArcaId`/`toArcaId`; omit the external `recipient` field. Cross-owner movement requires sender consent before staging and the matched Cash custody leg before credit. Clients declare and verify `arca.kernel.v9.Move/trading_cash_account` (signing registry revision 5), including exact source, recipient Cash identity, amount, nonce and deadline. Same-owner policy transfers retain their existing authorization. Pending cross-owner operations belong to the sender’s wallet projection.
+
+## Cash setup readiness
+
+Wallet Account stays `setting_up` until the preferred deposit receiver is
+active, including the gap after account creation and before receiver admission.
+Follow wallet snapshots for readiness; account creation alone is insufficient.
+Pending creation and receiver setup process every streamed chain head; the
+realm's configured confirmation depth and settlement checks still apply.
+This correction requires the corresponding platform deployment.
 
 ## Hyperliquid order response compatibility
 
