@@ -726,3 +726,5 @@ required. Trading-to-trading retains its native-perps route.
 ## Cash counterparty ownership
 
 A Cash endpoint belongs to this wallet only when every supplied boundaryId, arcaId and arcaPath matches its boundaryId/cashTarget. A different Cash identity is an external counterparty: a person send stays outgoing on the source and total, never arriving in the sender's Cash. An unqualified kind=cash remains the local-prediction sentinel.
+
+`getExchangeState` / `exchange/positions` may carry `stateSource: "fold"`: the state was computed by the platform's Hyperliquid account fold from Arca's records (positions, open P&L, margin, liquidation price, withdrawable) rather than read from the venue, on realms admins moved onto it; `observedAt` is then the fold's publication time. Absent on a venue read. Same shape; no `collateralModel` on a fold-served state.

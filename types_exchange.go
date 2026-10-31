@@ -379,6 +379,12 @@ type ExchangeState struct {
 	// from (RFC 3339, nanoseconds). Observations of one account are ordered
 	// by it; see ObservedBefore. Empty from a platform that predates the field.
 	ObservedAt string `json:"observedAt,omitempty"`
+	// StateSource is "fold" when this state was computed by the platform's
+	// own Hyperliquid account fold from Arca's records (positions, open P&L,
+	// margin, liquidation price, withdrawable under Hyperliquid's margining
+	// rules) rather than read from the venue; ObservedAt is then the fold's
+	// publication time. Empty on a venue read.
+	StateSource string `json:"stateSource,omitempty"`
 }
 
 type AssetFeeEntry struct {
