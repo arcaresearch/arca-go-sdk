@@ -2,7 +2,9 @@ package arca
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -46,7 +48,12 @@ func newWatchStream[T any]() *WatchStream[T] {
 	}
 }
 
-func (s *WatchStream[T]) emit(v T) {
+func (s *WatchStream[T]) emit(v T) { s.publish(v, true) }
+
+// publish delivers v; connect also moves the stream to WatchConnected. A
+// stream that re-renders held data (a mids tick while reconnecting) publishes
+// without connect so its state keeps saying the data is stale.
+func (s *WatchStream[T]) publish(v T, connect bool) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -54,7 +61,7 @@ func (s *WatchStream[T]) emit(v T) {
 	}
 	s.value = v
 	s.hasValue = true
-	if s.state != WatchConnected {
+	if connect && s.state != WatchConnected {
 		s.state = WatchConnected
 		s.notifyStateLocked(WatchConnected)
 	}
@@ -354,6 +361,7 @@ type AggregationWatchStream struct {
 
 	widMu      sync.Mutex
 	watchID    string
+	flowsSince string
 	recreating bool
 	redo       bool
 }
@@ -366,18 +374,31 @@ func (s *AggregationWatchStream) WatchID() string {
 	return s.watchID
 }
 
+// WatchAggregationOptions configures WatchAggregation.
+type WatchAggregationOptions struct {
+	// FlowsSince (RFC 3339) makes the aggregation's inflow and outflow totals
+	// count from this instant instead of from each account's creation. Pass
+	// the instant a P&L baseline's equity was measured at, so live P&L is
+	// equity minus that baseline minus the flows since.
+	FlowsSince string
+}
+
 // WatchAggregation subscribes to real-time aggregation updates for a set of
 // sources.
-func (a *Arca) WatchAggregation(ctx context.Context, sources []AggregationSource) (*AggregationWatchStream, error) {
+func (a *Arca) WatchAggregation(ctx context.Context, sources []AggregationSource, opts ...WatchAggregationOptions) (*AggregationWatchStream, error) {
 	if err := a.ensureReady(ctx); err != nil {
 		return nil, err
 	}
+	var o WatchAggregationOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	a.ws.EnsureConnected()
-	watchID, agg, err := a.ws.createAggregationWatch(ctx, sources, "")
+	watchID, agg, err := a.ws.createAggregationWatch(ctx, sources, o.FlowsSince)
 	if err != nil {
 		return nil, err
 	}
-	s := &AggregationWatchStream{WatchStream: newWatchStream[PathAggregation](), watchID: watchID}
+	s := &AggregationWatchStream{WatchStream: newWatchStream[PathAggregation](), watchID: watchID, flowsSince: o.FlowsSince}
 	unsub := a.ws.OnAggregationUpdated(func(wid string, updated *PathAggregation, _ RealmEvent) {
 		// The id changes every time the watch is re-established, so this has to
 		// read the current one — a captured id stops matching at the first
@@ -438,7 +459,7 @@ func (s *AggregationWatchStream) recreateOnce(a *Arca, sources []AggregationSour
 
 	ctx, cancel := context.WithTimeout(context.Background(), wsRequestTimeout)
 	defer cancel()
-	watchID, agg, err := a.ws.createAggregationWatch(ctx, sources, "")
+	watchID, agg, err := a.ws.createAggregationWatch(ctx, sources, s.flowsSince)
 	if err != nil || s.IsClosed() {
 		return
 	}
@@ -1455,4 +1476,550 @@ func (a *Arca) WatchTwap(ctx context.Context, exchangeID, operationID string) (*
 		s.emit(initial.Twap)
 	}
 	return s, nil
+}
+
+// ---- Projection watch ----
+
+// Backoff for re-creating a projection watch after a reconnect or rotation
+// when the re-create fails: doubles from 1s to a 30s ceiling until one
+// succeeds or the stream closes.
+const (
+	projectionRecreateInitial = time.Second
+	projectionRecreateMax     = 30 * time.Second
+)
+
+// WatchProjectionOptions scopes a projection watch. The scope only narrows the
+// projection's registered resources; no scope at all is an empty watch that
+// delivers nothing until SetPaths or SetPrefix names one.
+type WatchProjectionOptions struct {
+	// Paths are exact object paths to watch (max 500).
+	Paths []string
+	// Prefix is a sub-tree of the projection to watch.
+	Prefix string
+	// Exchange is the mids source rows re-mark against (default "sim").
+	Exchange string
+	// Window attaches the windowed pnl and volume figures the projection
+	// grants. SetPaths and SetPrefix keep it.
+	Window ProjectionWindow
+}
+
+// ProjectionWatchStream streams a registered projection's redacted rows for a
+// chosen set of accounts, keyed by path. Server frames are deltas (changed rows
+// and removed paths) merged into the held map; between them rows re-mark
+// against the mids feed for the markets they hold positions in.
+//
+// The server-side watch lives on the connection that created it. Reconnects
+// and rotations re-create it with the current scope, retrying with backoff
+// until a re-create succeeds; a delivery gap or server resync re-reads the
+// scope under the same watch. While either is under way IsStale is true and
+// the rows are the last ones delivered.
+type ProjectionWatchStream struct {
+	*WatchStream[map[string]ProjectedValuation]
+	a        *Arca
+	name     string
+	fields   []string
+	window   ProjectionWindow
+	exchange string
+	done     chan struct{}
+	renderCh chan struct{}
+
+	mu            sync.Mutex
+	stopped       bool
+	watchID       string
+	paths         []string
+	prefix        string
+	rows          map[string]ProjectedValuation
+	mids          map[string]string
+	markets       map[string]bool
+	renderConnect bool
+	recreating    bool
+	redo          bool
+	resyncing     bool
+	resyncAgain   bool
+
+	// scopeMu serializes scope changes and gap re-reads, so a later SetPaths
+	// always wins.
+	scopeMu sync.Mutex
+	// marketsMu serializes mids acquire/release so a release on Close can
+	// never race an acquire.
+	marketsMu sync.Mutex
+}
+
+// WatchProjection subscribes to a registered projection for the accounts in
+// opts. A path set comes back whole in the watch reply; a prefix scope is
+// paginated, and the rest is fetched over REST before this returns, so the
+// first value is complete. Requires arca:ReadProjection on the projection
+// name.
+//
+// With opts.Window, rows carry Pnl and Volume, each with its own From and
+// status. Rank or sum rows per figure only when their From matches.
+func (a *Arca) WatchProjection(ctx context.Context, name string, opts WatchProjectionOptions) (*ProjectionWatchStream, error) {
+	if err := a.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	exchange := opts.Exchange
+	if exchange == "" {
+		exchange = "sim"
+	}
+	paths := append([]string(nil), opts.Paths...)
+	a.ws.EnsureConnected()
+	reply, err := a.ws.createProjectionWatch(ctx, name, paths, opts.Prefix, opts.Window)
+	if err != nil {
+		return nil, err
+	}
+	s := &ProjectionWatchStream{
+		WatchStream: newWatchStream[map[string]ProjectedValuation](),
+		a:           a,
+		name:        name,
+		fields:      reply.Fields,
+		window:      opts.Window,
+		exchange:    exchange,
+		done:        make(chan struct{}),
+		renderCh:    make(chan struct{}, 1),
+		watchID:     reply.WatchID,
+		paths:       paths,
+		prefix:      opts.Prefix,
+		mids:        map[string]string{},
+		markets:     map[string]bool{},
+	}
+	if reply.Window != "" {
+		s.window = reply.Window
+	}
+	rows, err := s.fetchAll(ctx, reply, opts.Prefix)
+	if err != nil {
+		a.ws.destroyProjectionWatch(reply.WatchID)
+		return nil, err
+	}
+	s.rows = rowsByPath(rows)
+
+	s.addUnsub(a.ws.On(EventObjectValuation, s.onFrame))
+	s.addUnsub(a.ws.OnMidsUpdated(s.onMids))
+	// object.valuation frames are critical: a lost one leaves a row wrong
+	// until that account changes again.
+	s.addUnsub(a.ws.OnGap(func(int64) { go s.resync() }))
+	s.addUnsub(a.ws.OnStatus(func(st ConnectionStatus) {
+		if st == StatusDisconnected {
+			s.setState(WatchReconnecting)
+		}
+	}))
+	// Off the delivery goroutine: re-creating waits for a reply only that
+	// goroutine can deliver. A reconnect surfaces as OnAuthenticated, a
+	// rotation only as OnRotated.
+	s.addUnsub(a.ws.OnAuthenticated(func() { go s.recreate() }))
+	s.addUnsub(a.ws.OnRotated(func() { go s.recreate() }))
+	s.addUnsub(s.shutdown)
+
+	s.syncMarkets()
+	s.mu.Lock()
+	first := s.viewLocked()
+	s.mu.Unlock()
+	s.publish(first, true)
+	go s.renderLoop()
+	return s, nil
+}
+
+// WatchID returns the server-side watch id. It changes whenever the watch is
+// re-created on a new connection.
+func (s *ProjectionWatchStream) WatchID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.watchID
+}
+
+// Projection returns the projection name.
+func (s *ProjectionWatchStream) Projection() string { return s.name }
+
+// Fields returns the projection's field set at watch creation.
+func (s *ProjectionWatchStream) Fields() []string { return append([]string(nil), s.fields...) }
+
+// Window returns the window the rows' Pnl and Volume cover, empty for none.
+func (s *ProjectionWatchStream) Window() ProjectionWindow { return s.window }
+
+// Scope returns the paths and prefix the watch currently covers.
+func (s *ProjectionWatchStream) Scope() (paths []string, prefix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.paths...), s.prefix
+}
+
+// IsStale reports that the stream is reconnecting or re-reading its scope
+// after a delivery gap: the rows are the last ones delivered, not current,
+// and never zeros.
+func (s *ProjectionWatchStream) IsStale() bool {
+	if s.State() != WatchConnected {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resyncing || s.recreating
+}
+
+// SetPaths replaces the watched path set in place (max 500). The watch keeps
+// its id and window; the new scope's snapshot replaces the rows.
+func (s *ProjectionWatchStream) SetPaths(ctx context.Context, paths []string) error {
+	return s.setScope(ctx, append([]string(nil), paths...), "")
+}
+
+// SetPrefix replaces the watched sub-tree in place. See SetPaths.
+func (s *ProjectionWatchStream) SetPrefix(ctx context.Context, prefix string) error {
+	return s.setScope(ctx, nil, prefix)
+}
+
+func (s *ProjectionWatchStream) setScope(ctx context.Context, paths []string, prefix string) error {
+	s.scopeMu.Lock()
+	defer s.scopeMu.Unlock()
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return nil
+	}
+	s.paths, s.prefix = paths, prefix
+	wid := s.watchID
+	s.mu.Unlock()
+	reply, err := s.a.ws.updateProjectionWatch(ctx, wid, paths, prefix, "")
+	if err != nil {
+		return err
+	}
+	rows, err := s.fetchAll(ctx, reply, prefix)
+	if err != nil {
+		return err
+	}
+	s.replaceRows(wid, rows)
+	return nil
+}
+
+func (s *ProjectionWatchStream) fetchAll(ctx context.Context, reply projectionWatchReply, prefix string) ([]ProjectedValuation, error) {
+	rows := DecodeProjectedValuations(reply.Valuations)
+	for cursor := reply.Cursor; cursor != ""; {
+		page, err := s.a.GetProjectionValuations(ctx, s.name, ProjectionValuationsOptions{Prefix: prefix, Cursor: cursor, Window: s.window})
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, page.Rows()...)
+		cursor = page.nextCursor()
+	}
+	return rows, nil
+}
+
+func rowsByPath(rows []ProjectedValuation) map[string]ProjectedValuation {
+	out := make(map[string]ProjectedValuation, len(rows))
+	for _, r := range rows {
+		out[r.Path] = r
+	}
+	return out
+}
+
+// replaceRows swaps in a scope's snapshot, unless the watch it was read under
+// has since been replaced.
+func (s *ProjectionWatchStream) replaceRows(watchID string, rows []ProjectedValuation) {
+	s.mu.Lock()
+	if s.stopped || s.watchID != watchID {
+		s.mu.Unlock()
+		return
+	}
+	s.rows = rowsByPath(rows)
+	s.mu.Unlock()
+	s.syncMarkets()
+	s.requestRender(true)
+}
+
+func (s *ProjectionWatchStream) onFrame(ev RealmEvent) {
+	if ev.Projection == "" || ev.WatchID == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.stopped || ev.WatchID != s.watchID {
+		s.mu.Unlock()
+		return
+	}
+	// Removals first: an account replaced at the same path arrives as its new
+	// row, which a removal must not delete.
+	for _, p := range ev.Removed {
+		delete(s.rows, p)
+	}
+	for path, raw := range ev.Valuations {
+		var v ProjectedValuation
+		if json.Unmarshal(raw, &v) == nil {
+			s.rows[path] = v
+		}
+	}
+	s.mu.Unlock()
+	s.syncMarkets()
+	s.requestRender(true)
+}
+
+func (s *ProjectionWatchStream) onMids(mids map[string]string) {
+	s.mu.Lock()
+	relevant := false
+	for k, v := range mids {
+		s.mids[k] = v
+		relevant = relevant || s.markets[k]
+	}
+	s.mu.Unlock()
+	if relevant {
+		s.requestRender(false)
+	}
+}
+
+// viewLocked is the held rows re-marked at the latest mids.
+func (s *ProjectionWatchStream) viewLocked() map[string]ProjectedValuation {
+	out := make(map[string]ProjectedValuation, len(s.rows))
+	for p, v := range s.rows {
+		if len(s.mids) > 0 {
+			v = RevalueProjectedValuation(v, s.mids)
+		}
+		out[p] = v
+	}
+	return out
+}
+
+// requestRender schedules a publish of the current view. connect marks it as
+// fresh server data; a re-render of held rows at new mids leaves the state as
+// it is, so a reconnecting stream stays stale.
+func (s *ProjectionWatchStream) requestRender(connect bool) {
+	s.mu.Lock()
+	s.renderConnect = s.renderConnect || connect
+	s.mu.Unlock()
+	select {
+	case s.renderCh <- struct{}{}:
+	default:
+	}
+}
+
+// renderLoop publishes from one goroutine, so views are delivered in the
+// order their changes were applied.
+func (s *ProjectionWatchStream) renderLoop() {
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-s.renderCh:
+		}
+		s.mu.Lock()
+		connect := s.renderConnect && !s.recreating
+		s.renderConnect = false
+		out := s.viewLocked()
+		s.mu.Unlock()
+		s.publish(out, connect)
+	}
+}
+
+// syncMarkets keeps the mids interest equal to the union of the rows'
+// position markets.
+func (s *ProjectionWatchStream) syncMarkets() {
+	s.marketsMu.Lock()
+	defer s.marketsMu.Unlock()
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	want := map[string]bool{}
+	for _, v := range s.rows {
+		for _, p := range v.Positions {
+			if p.Market != "" {
+				want[p.Market] = true
+			}
+		}
+	}
+	var add, drop []string
+	for m := range want {
+		if !s.markets[m] {
+			add = append(add, m)
+		}
+	}
+	for m := range s.markets {
+		if !want[m] {
+			drop = append(drop, m)
+		}
+	}
+	s.markets = want
+	s.mu.Unlock()
+	sort.Strings(add)
+	sort.Strings(drop)
+	if len(add) > 0 {
+		s.a.ws.acquireMids(s.exchange, add)
+	}
+	if len(drop) > 0 {
+		s.a.ws.releaseMids(drop)
+	}
+}
+
+func (s *ProjectionWatchStream) shutdown() {
+	s.marketsMu.Lock()
+	s.mu.Lock()
+	s.stopped = true
+	held := make([]string, 0, len(s.markets))
+	for m := range s.markets {
+		held = append(held, m)
+	}
+	s.markets = map[string]bool{}
+	wid := s.watchID
+	s.mu.Unlock()
+	if len(held) > 0 {
+		sort.Strings(held)
+		s.a.ws.releaseMids(held)
+	}
+	s.marketsMu.Unlock()
+	close(s.done)
+	s.a.ws.destroyProjectionWatch(wid)
+}
+
+// recreate re-establishes the server-side watch on the current connection,
+// with the current scope. One runs at a time; a trigger that lands during one
+// is honoured afterwards, since the in-flight attempt may have been written to
+// the connection that just went away.
+func (s *ProjectionWatchStream) recreate() {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	if s.recreating {
+		s.redo = true
+		s.mu.Unlock()
+		return
+	}
+	s.recreating = true
+	s.mu.Unlock()
+	for {
+		ok := s.recreateUntilDone()
+		s.mu.Lock()
+		again := s.redo && !s.stopped
+		s.redo = false
+		if !again {
+			s.recreating = false
+		}
+		s.mu.Unlock()
+		if !again {
+			if ok {
+				s.requestRender(true)
+			}
+			return
+		}
+	}
+}
+
+// recreateUntilDone retries a failed re-create with backoff, keeping the last
+// rows and the reconnecting state meanwhile. False when the stream closed.
+func (s *ProjectionWatchStream) recreateUntilDone() bool {
+	delay := projectionRecreateInitial
+	for {
+		select {
+		case <-s.done:
+			return false
+		default:
+		}
+		if s.recreateOnce() == nil {
+			return true
+		}
+		s.setState(WatchReconnecting)
+		select {
+		case <-s.done:
+			return false
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, projectionRecreateMax)
+	}
+}
+
+func (s *ProjectionWatchStream) recreateOnce() error {
+	s.mu.Lock()
+	previous := s.watchID
+	paths := append([]string(nil), s.paths...)
+	prefix := s.prefix
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), wsRequestTimeout)
+	defer cancel()
+	reply, err := s.a.ws.createProjectionWatch(ctx, s.name, paths, prefix, s.window)
+	if err != nil {
+		return err
+	}
+	rows, err := s.fetchAll(ctx, reply, prefix)
+	if err != nil {
+		s.a.ws.destroyProjectionWatch(reply.WatchID)
+		return err
+	}
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.a.ws.destroyProjectionWatch(reply.WatchID)
+		return nil
+	}
+	s.watchID = reply.WatchID
+	s.rows = rowsByPath(rows)
+	s.mu.Unlock()
+	if previous != "" && previous != reply.WatchID {
+		// Best effort: after a reconnect the connection it belonged to is
+		// gone, which destroyed it server-side anyway.
+		s.a.ws.destroyProjectionWatch(previous)
+	}
+	s.syncMarkets()
+	return nil
+}
+
+// resync re-reads the scope under the same watch after a delivery gap or a
+// server resync, behind any scope change in flight. A reconnect re-reads
+// anyway, so it is skipped then. If the re-read fails the watch is
+// re-created.
+func (s *ProjectionWatchStream) resync() {
+	if s.State() != WatchConnected {
+		return
+	}
+	s.mu.Lock()
+	if s.stopped || s.recreating {
+		s.mu.Unlock()
+		return
+	}
+	if s.resyncing {
+		s.resyncAgain = true
+		s.mu.Unlock()
+		return
+	}
+	s.resyncing = true
+	s.mu.Unlock()
+	failed := false
+	for {
+		s.mu.Lock()
+		s.resyncAgain = false
+		s.mu.Unlock()
+		if s.reread() != nil {
+			failed = true
+			break
+		}
+		s.mu.Lock()
+		again := s.resyncAgain && !s.stopped
+		s.mu.Unlock()
+		if !again {
+			break
+		}
+	}
+	if failed {
+		s.recreate()
+	}
+	s.mu.Lock()
+	s.resyncing = false
+	s.mu.Unlock()
+}
+
+func (s *ProjectionWatchStream) reread() error {
+	s.scopeMu.Lock()
+	defer s.scopeMu.Unlock()
+	s.mu.Lock()
+	wid := s.watchID
+	paths := append([]string(nil), s.paths...)
+	prefix := s.prefix
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), wsRequestTimeout)
+	defer cancel()
+	reply, err := s.a.ws.updateProjectionWatch(ctx, wid, paths, prefix, "")
+	if err != nil {
+		return err
+	}
+	rows, err := s.fetchAll(ctx, reply, prefix)
+	if err != nil {
+		return err
+	}
+	s.replaceRows(wid, rows)
+	return nil
 }

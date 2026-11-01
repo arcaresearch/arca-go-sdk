@@ -503,6 +503,11 @@ func (m *WebSocketManager) handleMessage(data []byte) {
 			m.resolvePending(head.RequestID, data)
 		}
 		return
+	case "projection_watch_created", "projection_watch_updated":
+		if head.RequestID != "" {
+			m.resolvePending(head.RequestID, data)
+		}
+		return
 	case "aggregation_watch_created", "chart_snapshot_watch_created", "watch_snapshot":
 		if head.RequestID != "" {
 			m.resolvePending(head.RequestID, data)
@@ -1644,6 +1649,97 @@ func (m *WebSocketManager) syncTrades() {
 	}
 	m.mu.Unlock()
 	m.send(map[string]any{"action": "subscribe_trades", "coins": coins})
+}
+
+// ---- Projection watch ----
+
+// projectionWatchReply is the server's answer to watch_projection or
+// update_projection_watch: the snapshot of the watch's scope. A prefix scope
+// is paginated; Cursor names the next REST page.
+type projectionWatchReply struct {
+	WatchID    string            `json:"watchId"`
+	Projection string            `json:"projection"`
+	Fields     []string          `json:"fields"`
+	Window     ProjectionWindow  `json:"window"`
+	Valuations []json.RawMessage `json:"valuations"`
+	Cursor     string            `json:"cursor"`
+}
+
+// createProjectionWatch creates a connection-scoped projection watch for the
+// scope and waits for its snapshot. The watch dies with the connection.
+func (m *WebSocketManager) createProjectionWatch(ctx context.Context, projection string, paths []string, prefix string, window ProjectionWindow) (projectionWatchReply, error) {
+	msg := map[string]any{"action": "watch_projection", "projection": projection}
+	return m.projectionRequest(ctx, msg, paths, prefix, window)
+}
+
+// updateProjectionWatch replaces a live watch's scope in place and waits for
+// the new scope's snapshot. Without a window the watch keeps the one it has.
+func (m *WebSocketManager) updateProjectionWatch(ctx context.Context, watchID string, paths []string, prefix string, window ProjectionWindow) (projectionWatchReply, error) {
+	msg := map[string]any{"action": "update_projection_watch", "watchId": watchID}
+	return m.projectionRequest(ctx, msg, paths, prefix, window)
+}
+
+func (m *WebSocketManager) projectionRequest(ctx context.Context, msg map[string]any, paths []string, prefix string, window ProjectionWindow) (projectionWatchReply, error) {
+	m.EnsureConnected()
+	reqID := "proj-" + m.newRequestID()
+	ch := m.registerPending(reqID)
+	msg["requestId"] = reqID
+	// An empty scope goes over the wire as exactly that: an empty watch.
+	if len(paths) > 0 {
+		msg["paths"] = paths
+	}
+	if prefix != "" {
+		msg["prefix"] = prefix
+	}
+	if window != "" {
+		msg["window"] = string(window)
+	}
+	m.sendWhenConnected(msg)
+
+	timer := time.NewTimer(wsRequestTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		m.dropPending(reqID)
+		return projectionWatchReply{}, ctx.Err()
+	case raw, ok := <-ch:
+		if !ok {
+			return projectionWatchReply{}, &ArcaError{Code: "WS_DISCONNECTED", Message: "websocket disconnected"}
+		}
+		var head struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &head); err != nil {
+			return projectionWatchReply{}, err
+		}
+		if head.Type == "error" {
+			return projectionWatchReply{}, &ArcaError{Code: "WS_ERROR", Message: head.Message}
+		}
+		var reply projectionWatchReply
+		if err := json.Unmarshal(raw, &reply); err != nil {
+			return projectionWatchReply{}, err
+		}
+		return reply, nil
+	case <-timer.C:
+		m.dropPending(reqID)
+		return projectionWatchReply{}, &ArcaError{Code: "WS_TIMEOUT", Message: "timeout waiting for the projection watch reply"}
+	}
+}
+
+func (m *WebSocketManager) dropPending(requestID string) {
+	m.mu.Lock()
+	delete(m.pending, requestID)
+	m.mu.Unlock()
+}
+
+// destroyProjectionWatch tears down a projection watch. Best effort: the
+// server ignores a watch id it no longer knows.
+func (m *WebSocketManager) destroyProjectionWatch(watchID string) {
+	if watchID == "" {
+		return
+	}
+	m.send(map[string]any{"action": "unwatch_projection", "watchId": watchID})
 }
 
 // ---- Aggregation watch ----

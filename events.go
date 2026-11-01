@@ -1,5 +1,7 @@
 package arca
 
+import "encoding/json"
+
 // EventType enumerates every event type emitted by the Arca WebSocket stream.
 type EventType = string
 
@@ -110,6 +112,15 @@ type RealmEvent struct {
 
 	Path    string `json:"path,omitempty"`
 	WatchID string `json:"watchId,omitempty"`
+
+	// Projection names the projection on a projection watch's object.valuation
+	// frame. Its Valuations are the changed rows keyed by path, undecoded so
+	// one row this SDK cannot read never drops the frame (decode each with
+	// json.Unmarshal into a ProjectedValuation), and Removed lists the paths
+	// to drop.
+	Projection string                     `json:"projection,omitempty"`
+	Valuations map[string]json.RawMessage `json:"valuations,omitempty"`
+	Removed    []string                   `json:"removed,omitempty"`
 
 	Order   *SimOrderWithFills `json:"order,omitempty"`
 	Fill    *SimFill           `json:"fill,omitempty"`

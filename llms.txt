@@ -246,7 +246,8 @@ State(), OnStateChange, Close().
 | client.WatchBalances(ctx, path) | BalanceUpdate |
 | client.WatchObject(ctx, path) | ObjectValuation |
 | client.WatchObjects(ctx, paths) | map[string]ObjectValuation |
-| client.WatchAggregation(ctx, sources) | PathAggregation |
+| client.WatchAggregation(ctx, sources, ...WatchAggregationOptions) | PathAggregation |
+| client.WatchProjection(ctx, name, WatchProjectionOptions) | map[string]ProjectedValuation |
 | client.WatchExchangeState(ctx, id) | ExchangeState |
 | client.WatchFills(ctx, id, opts) | Fill |
 | client.WatchRealmFills(ctx, *WatchRealmFillsOptions{FromCursor}) | RealmFillUpdate{Fill, Cursor, Replayed} |
@@ -310,7 +311,60 @@ NewPatternSource(p), NewWatchSource(id).
 WatchAggregation creates its watch on the socket (create_aggregation_watch).
 The server answers within 8 s: a create it cannot finish in time, or one past
 16 outstanding on the connection, returns the server's error for that call
-only; the socket stays open.
+only; the socket stays open. WatchAggregation(ctx, sources,
+WatchAggregationOptions{FlowsSince: t}) counts the inflow and outflow totals
+from t (RFC 3339) instead of from each account's creation; pass the instant a
+P&L baseline's equity was measured at. It is kept across re-creates.
+
+### Projections: WatchProjection and rolling 30-day P&L and volume (2.20.0)
+
+client.WatchProjection(ctx, name, WatchProjectionOptions{Paths, Prefix,
+Exchange, Window}) -> *ProjectionWatchStream (a WatchStream of
+map[string]ProjectedValuation keyed by path). One watch over the accounts
+named (Paths, max 500, and/or a Prefix sub-tree; both only narrow the
+projection's registration). No Paths and no Prefix is an EMPTY watch, never
+every covered account. SetPaths(ctx, paths) / SetPrefix(ctx, prefix) replace
+the scope in place under the same watch id; the ack's snapshot replaces the
+rows. Server frames are deltas (changed rows plus a `removed` list); between
+them rows re-mark against mids for the markets they hold. Requires
+arca:ReadProjection on the projection name. GetProjectionValuations(ctx, name,
+ProjectionValuationsOptions{..., Window}) is the REST read;
+ProjectionValuationsResponse.Rows() decodes its rows, skipping any row that
+cannot be read (DecodeProjectedValuations does the same for raw rows, e.g.
+RealmEvent.Valuations).
+
+Windowed figures (requires the matching platform deployment): register `pnl`
+and/or `volume` in the projection's fields (each granted separately), then set
+Window: arca.ProjectionWindow30d. Rows carry whichever figures the projection
+grants; a window on a projection that grants neither is rejected
+(`invalid_window`). Without Window nothing changes; SetPaths / SetPrefix keep it.
+
+- Pnl *ProjectedPnl {Window, From, AsOf, Coverage, CoveredFrom, Status,
+  PnlUsd *string}. P&L over (From, AsOf] is A(AsOf) - A(From) with
+  A(t) = equity(t) - cumInflows(t) + cumOutflows(t): deposits, withdrawals and
+  transfers never count; realized and unrealized gains, fees, funding and
+  liquidations do. Equals GetPnlHistory's P&L for the same from. From is an
+  hour boundary and advances hourly.
+- Volume *ProjectedVolume {Window, From, AsOf, Coverage, CoveredFrom, Status,
+  VolumeUsd *string}. Sum of |size × price| over executed fills in
+  (From, AsOf], liquidations and partial fills included, each fill once;
+  unfilled orders, deposits, transfers, fees, funding and price moves never
+  count. Changes only when a fill lands or the window advances.
+- Status per figure: "complete", "incomplete" (P&L only: a mark was missing,
+  so the value is off by that position's move) or "pending" (not computed yet;
+  PnlUsd / VolumeUsd is nil, never "0" — render unknown). Coverage
+  "since_creation" marks an account younger than the window. Rank or sum rows
+  only when their From matches. Values are exact decimal strings.
+- RevalueProjectedValuation(v, mids) — what the stream applies between frames —
+  shifts Equity, UnrealizedValue and Pnl.PnlUsd by the change in position P&L,
+  in exact decimals, so unsettled funding stays in; Volume is never re-marked;
+  server-priced rows are returned unchanged.
+- Recovery: a delivery gap or a server stream.resync re-reads the current scope
+  under the same watch; a reconnect or rotation re-creates the watch with the
+  current scope and window, retrying with backoff (1 s doubling to 30 s) until
+  it lands. IsStale() is true while either is under way — show the held rows
+  as stale, not as zero. A removal and a new row for the same path in one
+  frame (an account replaced at that path) keeps the new row.
 
 Lower-level access: client.WS() returns *WebSocketManager (On(type, cb),
 typed OnX listeners, OnGap, OnAuthenticated, OnRotated, EnsureConnected,
