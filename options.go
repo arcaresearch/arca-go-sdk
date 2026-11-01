@@ -207,15 +207,17 @@ type CreatePerpsExchangeOptions struct {
 	//     and use Market.Name. The symbol is the BASE ASSET ("BTC"), not the
 	//     venue symbol ("BTC-USD-PERP") — that is Market.VenueSymbol and is
 	//     display text only.
+	//   - The venue account id is a 20-byte 0x wallet address.
 	//   - Leverage is fixed per market (10x on the crypto perps). SetLeverage
-	//     and the margin-mode calls are unsupported and refuse; hide those
-	//     controls rather than catching.
-	//   - No TP/SL and no TWAP in v1.
+	//     and SetMarginMode refuse; hide those controls rather than catching.
+	//     Margin mode is chosen per order instead (Isolated: true).
+	//   - Post-only (TimeInForce "ALO") is supported; reduce-only must be IOC
+	//     or a market order. No TP/SL and no TWAP.
 	//   - The order book is SHARED and PUBLIC, and it is a testnet whose
 	//     operator can reset it without notice. Both belong in user-facing
 	//     copy.
-	//   - A one-time ~1 USDT activation fee is charged on first activity, so
-	//     equity reads as deposit − 1 afterwards.
+	//   - The venue's one-time account activation fee is paid on top of the
+	//     first deposit, so equity equals the amount deposited.
 	Venue string
 	// Deprecated: use Venue. ExchangeType carried no venue information (it
 	// was always "hyperliquid") and is ignored. Removed in a future release.
