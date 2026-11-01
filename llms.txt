@@ -460,6 +460,11 @@ admin.ListMembers / UpdateMember / RemoveMember / InviteMember / ListInvitations
 admin.GetCredentialScope / ListAuthAuditLog / TransferOwnership
 ```
 
+`UpdateRealmSettings` changes only the fields you set. `RealmSettings.AllowedOrigins`
+lists the browser origins (e.g. `https://app.example.com`) whose pages may call the
+REST API with a token locked to the realm; nil leaves it unchanged, `[]string{}`
+clears it. Other credentials from a listed origin get 403 `ORIGIN_NOT_ALLOWED`.
+
 ## Step-up auth (412)
 
 Set arca.Config.StepUpHandler (or admin SetStepUpHandler):

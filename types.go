@@ -47,6 +47,10 @@ type RealmSettings struct {
 	// DefaultApplicationFeeTenthsBps is the realm's default application fee in
 	// tenths of a basis point (so 40 == 4 bps).
 	DefaultApplicationFeeTenthsBps *int `json:"defaultApplicationFeeTenthsBps,omitempty"`
+	// AllowedOrigins are the browser origins (e.g. "https://app.example.com")
+	// whose pages may call the REST API with a token locked to this realm.
+	// Nil leaves the setting unchanged on update; an empty slice clears it.
+	AllowedOrigins []string `json:"allowedOrigins,omitzero"`
 }
 
 type Realm struct {
