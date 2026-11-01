@@ -337,7 +337,7 @@ Windowed figures (requires the matching platform deployment): register `pnl`
 and/or `volume` in the projection's fields (each granted separately), then set
 Window: arca.ProjectionWindow30d. Rows carry whichever figures the projection
 grants; a window on a projection that grants neither is rejected
-(`invalid_window`). Without Window nothing changes; SetPaths / SetPrefix keep it.
+with a validation error (REST `400 VALIDATION_ERROR`). Without Window nothing changes; SetPaths / SetPrefix keep it.
 
 - Pnl *ProjectedPnl {Window, From, AsOf, Coverage, CoveredFrom, Status,
   PnlUsd *string}. P&L over (From, AsOf] is A(AsOf) - A(From) with
