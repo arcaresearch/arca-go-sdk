@@ -85,7 +85,8 @@ func TestWalletMoneyFiguresAreArcasFiguresVerbatim(t *testing.T) {
 				if figure.SettledMicro != nil {
 					t.Errorf("%s: %s should have no figure", name, account.ArcaID)
 				}
-			} else if *figure.SettledMicro != account.Balances.TotalMicro || *figure.AvailableMicro != account.Balances.WithdrawableMicro {
+			} else if *figure.SettledMicro != account.Balances.TotalMicro || figure.AvailableMicro == nil ||
+				*figure.AvailableMicro != MicroSum([]string{account.Balances.WithdrawableMicro, account.Balances.SpotMicro}) {
 				t.Errorf("%s: %s is not balances verbatim", name, account.ArcaID)
 			}
 		}
@@ -95,6 +96,31 @@ func TestWalletMoneyFiguresAreArcasFiguresVerbatim(t *testing.T) {
 		if money.Complete != snapshot.Totals.Complete {
 			t.Errorf("%s: complete", name)
 		}
+	}
+}
+
+// Under Hyperliquid's unified mode the venue reports withdrawable 0 and keeps
+// the free money in spot; an account must not read as having nothing to pay out.
+func TestUnifiedAccountAvailableCountsFreeSpot(t *testing.T) {
+	money := ComposeWalletMoney(loadWalletMoneyFixture(t, "22-unified-collateral"), ComposeWalletMoneyOptions{})
+	for id, want := range map[string]string{"obj_hl1": "1100000", "obj_hl2": "1000000"} {
+		if got := money.Account(id).AvailableMicro; got == nil || *got != want {
+			t.Errorf("%s: available %v, want %s", id, got, want)
+		}
+	}
+	if *money.Account("obj_hl1").SettledMicro != "1500000" {
+		t.Errorf("settled %s", *money.Account("obj_hl1").SettledMicro)
+	}
+}
+
+func TestMalformedAccountBalanceHasNoAvailable(t *testing.T) {
+	for _, c := range [][2]string{{"", "5"}, {"5", "x"}, {"-1", "5"}} {
+		if got := moneyAccountPayout(FundingV9WalletNativeBalances{WithdrawableMicro: c[0], SpotMicro: c[1]}); got != nil {
+			t.Errorf("%q/%q: available %s, want none", c[0], c[1], *got)
+		}
+	}
+	if got := moneyAccountPayout(FundingV9WalletNativeBalances{WithdrawableMicro: "2", SpotMicro: "3"}); got == nil || *got != "5" {
+		t.Errorf("2+3: %v", got)
 	}
 }
 

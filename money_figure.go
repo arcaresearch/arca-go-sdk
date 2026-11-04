@@ -130,8 +130,9 @@ type MoneyFigure struct {
 	// SettledMicro is Arca's figure verbatim: Cash confirmedMicro, an
 	// account's balances.totalMicro, the wallet's totals.totalMicro.
 	SettledMicro *string `json:"settledMicro"`
-	// AvailableMicro is Cash availableMicro or an account's
-	// withdrawableMicro; nil for the total.
+	// AvailableMicro is what the figure can pay out now: Cash availableMicro
+	// or an account's withdrawableMicro plus spotMicro; nil for the total and
+	// for an account with no well-formed balances.
 	AvailableMicro *string    `json:"availableMicro"`
 	Arriving       []MoneyLeg `json:"arriving"`
 	Departing      []MoneyLeg `json:"departing"`
@@ -292,8 +293,8 @@ func ComposeWalletMoney(snapshot FundingV9WalletSnapshot, opts ComposeWalletMone
 			figure.Departing = []MoneyLeg{}
 		}
 		if b := account.Balances; b != nil {
-			total, withdrawable := b.TotalMicro, b.WithdrawableMicro
-			figure.SettledMicro, figure.AvailableMicro, figure.Source = &total, &withdrawable, b.Source
+			total := b.TotalMicro
+			figure.SettledMicro, figure.AvailableMicro, figure.Source = &total, moneyAccountPayout(*b), b.Source
 		}
 		if revaluation, ok := opts.Revaluations[account.ArcaID]; ok {
 			if micro, reason := moneyRevalue(revaluation, account, figure); reason == "" {
@@ -544,6 +545,24 @@ func moneyRevalue(revaluation MoneyRevaluation, account FundingV9WalletTradingAc
 		return "", "venue frame older than the figure"
 	}
 	return revaluation.EquityMicro, ""
+}
+
+// moneyAccountPayout is what an account can pay out now: the venue's perps
+// withdrawable plus its free spot USDC, two parts of the one observation the
+// frame carries, counted as Arca's route previews count them. Under
+// Hyperliquid's unified and portfolio-margin modes withdrawable is 0 and free
+// spot is all of it. Nil unless both are non-negative integers.
+func moneyAccountPayout(b FundingV9WalletNativeBalances) *string {
+	withdrawable, ok := microParse(b.WithdrawableMicro)
+	if !ok || withdrawable.Sign() < 0 {
+		return nil
+	}
+	spot, ok := microParse(b.SpotMicro)
+	if !ok || spot.Sign() < 0 {
+		return nil
+	}
+	payout := new(big.Int).Add(withdrawable, spot).String()
+	return &payout
 }
 
 // moneyComposedTotal is cash.confirmed + moving(in transit) + sum(accounts),
