@@ -179,7 +179,7 @@ PlaceOrder/ClosePosition return *arca.OrderHandle (embeds OperationHandle):
 | Min order size (UI gating) | client.MinOrderSize(ctx, MinOrderSizeOptions{Market|MarketID, Price, ReduceOnly?, IsTrigger?, SizeToMax?}) -> {MinSize, MinNotionalUsd} (ceil to szDecimals; treats any reduce-only as exempt — the venue only exempts an *exact* close, so verify a partial trim clears the floor yourself) |
 | Validate order size (advisory) | client.ValidateOrderSize(ctx, ValidateOrderSizeOptions{..., Size}) -> {OK, Reason, MinSize, MinNotionalUsd} |
 | Trade summary | client.TradeSummary(ctx, id, *TradeSummaryOptions) |
-| TWAP | client.PlaceTwap / CancelTwap / GetTwap / ListTwaps |
+| TWAP | client.PlaceTwap / CancelTwap / GetTwap / ListTwaps — at most one IOC slice per IntervalSeconds slot; ExecutedSize sums settled fills; SliceCount ≤ ExpectedSliceCount; NextSliceAt = when the next slice is due (nil once not active); 5 failed slices in a row fail it |
 | TWAP limits | client.GetTwapLimits(ctx) / RecommendedIntervalSeconds(ctx, mins) |
 | Market meta | client.GetMarketMeta(ctx) / Market(ctx, id) / ResolveMarkets(ctx, symbol, *opts) / ResolveMarket(ctx, symbol, *opts) / PreloadMarketMeta(ctx) |
 | Mids/tickers/book | client.GetMarketMids / GetMarketTickers / GetOrderBook |

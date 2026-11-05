@@ -499,38 +499,64 @@ const (
 	TwapFailed    TwapStatus = "failed"
 )
 
+// Twap is a TWAP order. It is scheduled as ExpectedSliceCount slots, one
+// every IntervalSeconds from StartTime. In each slot at most one slice is
+// sent: an IOC market order for an even share of what is left over the
+// remaining slots, never more than three planned slices and never more than
+// TotalSize − ExecutedSize. A slot passes without a slice while the previous
+// slice is still in flight, or when its share is below the venue's minimum
+// order. The TWAP completes when ExecutedSize reaches TotalSize, when no
+// slot is left, or at EndTime; it fails after five failed slices in a row.
 type Twap struct {
-	TwapID              string     `json:"twapId"`
-	RealmID             string     `json:"realmId"`
-	OperationID         string     `json:"operationId"`
-	ExchangeObjectID    string     `json:"exchangeObjectId"`
-	ExchangeObjectPath  string     `json:"exchangeObjectPath"`
-	SimAccountID        string     `json:"simAccountId"`
-	Type                string     `json:"type"`
-	Market              string     `json:"market"`
-	Side                OrderSide  `json:"side"`
-	TotalSize           *string    `json:"totalSize"`
-	ExecutedSize        string     `json:"executedSize"`
-	ExecutedNotional    string     `json:"executedNotional"`
-	SliceCount          int        `json:"sliceCount"`
-	ExpectedSliceCount  int        `json:"expectedSliceCount"`
-	FilledSlices        int        `json:"filledSlices"`
-	FailedSlices        int        `json:"failedSlices"`
-	IntervalSeconds     int        `json:"intervalSeconds"`
-	DurationMinutes     int        `json:"durationMinutes"`
-	StartTime           string     `json:"startTime"`
-	EndTime             *string    `json:"endTime"`
-	Status              TwapStatus `json:"status"`
-	CancelReason        *string    `json:"cancelReason"`
-	FailureReason       *string    `json:"failureReason"`
-	TargetPrice         *string    `json:"targetPrice"`
-	ReduceOnly          bool       `json:"reduceOnly"`
-	Leverage            *int       `json:"leverage"`
-	SlippageBps         int        `json:"slippageBps"`
-	Randomize           bool       `json:"randomize"`
-	ConsecutiveFailures int        `json:"consecutiveFailures"`
-	CreatedAt           string     `json:"createdAt"`
-	UpdatedAt           string     `json:"updatedAt"`
+	TwapID             string    `json:"twapId"`
+	RealmID            string    `json:"realmId"`
+	OperationID        string    `json:"operationId"`
+	ExchangeObjectID   string    `json:"exchangeObjectId"`
+	ExchangeObjectPath string    `json:"exchangeObjectPath"`
+	SimAccountID       string    `json:"simAccountId"`
+	Type               string    `json:"type"`
+	Market             string    `json:"market"`
+	Side               OrderSide `json:"side"`
+	TotalSize          *string   `json:"totalSize"`
+	// ExecutedSize is the summed fill size of settled slices, partial fills
+	// included; ExecutedNotional is their fill size × average fill price.
+	ExecutedSize     string `json:"executedSize"`
+	ExecutedNotional string `json:"executedNotional"`
+	// SliceCount is slices sent so far, including one still in flight. It
+	// never exceeds ExpectedSliceCount, the number of slots:
+	// max(1, durationSeconds / intervalSeconds).
+	SliceCount         int `json:"sliceCount"`
+	ExpectedSliceCount int `json:"expectedSliceCount"`
+	// FilledSlices counts settled slices that executed a nonzero size;
+	// FailedSlices those that executed nothing (rejected, failed, or an IOC
+	// that found no liquidity within the slippage cap). SliceCount −
+	// FilledSlices − FailedSlices is 1 while a slice is in flight.
+	FilledSlices    int        `json:"filledSlices"`
+	FailedSlices    int        `json:"failedSlices"`
+	IntervalSeconds int        `json:"intervalSeconds"`
+	DurationMinutes int        `json:"durationMinutes"`
+	StartTime       string     `json:"startTime"`
+	EndTime         *string    `json:"endTime"`
+	Status          TwapStatus `json:"status"`
+	// CancelReason is "user", "liquidated", "consecutive_failures" or
+	// "progress_unknown" (started before fills were counted into
+	// ExecutedSize, so stopped rather than risk trading past its total).
+	CancelReason  *string `json:"cancelReason"`
+	FailureReason *string `json:"failureReason"`
+	TargetPrice   *string `json:"targetPrice"`
+	ReduceOnly    bool    `json:"reduceOnly"`
+	Leverage      *int    `json:"leverage"`
+	SlippageBps   int     `json:"slippageBps"`
+	Randomize     bool    `json:"randomize"`
+	// ConsecutiveFailures is failed slices since the last filled one; the
+	// TWAP fails at 5.
+	ConsecutiveFailures int `json:"consecutiveFailures"`
+	// NextSliceAt is when the next slot opens and the next slice is due.
+	// Nil once the TWAP is no longer active. At or after EndTime it means no
+	// slot is left and the TWAP completes once its in-flight slice settles.
+	NextSliceAt *string `json:"nextSliceAt,omitempty"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
 }
 
 type TwapOperationResponse struct {
