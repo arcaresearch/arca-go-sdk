@@ -498,3 +498,36 @@ func TestWatchRealmFills_LiveFillWithoutCreatedAtKeepsCursor(t *testing.T) {
 		t.Errorf("cursor = %q after a createdAt-less fill, want unchanged %q", got, ts1+"|f1")
 	}
 }
+
+// A venue close that is not a liquidation (the paper venue sweeping a
+// position smaller than one lot) is booked as an isLiquidation fill. The
+// live event and the REST listing must both carry its closeReason, or a
+// consumer of this stream has to infer a sweep from size and fee.
+func TestFillCloseReason_LiveEventAndListingAgree(t *testing.T) {
+	const payload = `{"id":"ple_sweep","operationId":"opr_sweep","market":"hl:0:PUMP",
+		"side":"sell","size":"0.6","price":"0.0026885","fee":"0","realizedPnl":"-0.00017371",
+		"isLiquidation":true,"closeReason":"dust_sweep","createdAt":"2026-11-19T17:58:01.000000Z"}`
+
+	var listed Fill
+	if err := json.Unmarshal([]byte(payload), &listed); err != nil {
+		t.Fatalf("decode listing fill: %v", err)
+	}
+
+	var ev RealmEvent
+	if err := json.Unmarshal([]byte(`{"type":"fill.recorded","entityId":"obj_1","fill":`+payload+`}`), &ev); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	live := fillFromRecordedEvent(ev)
+
+	for name, f := range map[string]Fill{"listing": listed, "live event": live} {
+		if f.CloseReason != FillCloseReasonDustSweep {
+			t.Errorf("%s: closeReason = %q, want %q", name, f.CloseReason, FillCloseReasonDustSweep)
+		}
+		if f.LiquidationKind != "" {
+			t.Errorf("%s: a sweep is not a liquidation, got liquidationKind %q", name, f.LiquidationKind)
+		}
+		if !f.IsLiquidation {
+			t.Errorf("%s: the fill is still a venue close", name)
+		}
+	}
+}

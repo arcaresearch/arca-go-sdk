@@ -211,6 +211,7 @@ type SimFill struct {
 	Tpsl              string                 `json:"tpsl,omitempty"`
 	TriggerPx         string                 `json:"triggerPx,omitempty"`
 	LiquidationKind   string                 `json:"liquidationKind,omitempty"`
+	CloseReason       string                 `json:"closeReason,omitempty"`
 }
 
 type SimOrderWithFills struct {
@@ -275,11 +276,30 @@ type Fill struct {
 	// TriggerPx is the trigger price of the originating order. Present
 	// only for trigger orders.
 	TriggerPx string `json:"triggerPx,omitempty"`
-	// LiquidationKind classifies an IsLiquidation fill: "liquidation"
-	// (margin call) or "adl" (backstop / auto-deleverage close). Empty on
-	// liquidations recorded before the venue method was stamped.
+	// LiquidationKind classifies an IsLiquidation fill that was a margin
+	// liquidation: "liquidation" (margin call) or "adl" (backstop /
+	// auto-deleverage close). Empty on liquidations recorded before the
+	// venue method was stamped, and on a venue close that was not a
+	// liquidation (see CloseReason).
 	LiquidationKind string `json:"liquidationKind,omitempty"`
+	// CloseReason says why the venue closed the position on an
+	// IsLiquidation fill: one of the FillCloseReason* constants. Empty when
+	// the venue recorded no reason; treat that as a liquidation.
+	CloseReason string `json:"closeReason,omitempty"`
 }
+
+// The values of Fill.CloseReason.
+const (
+	// The account could not carry the position (margin call).
+	FillCloseReasonLiquidation = "liquidation"
+	// Backstop / auto-deleverage close.
+	FillCloseReasonADL = "adl"
+	// The market was delisted and the position settled.
+	FillCloseReasonDelisted = "delisted"
+	// The paper venue closed a position smaller than one lot, at the mark,
+	// with no fee. Housekeeping, not a liquidation.
+	FillCloseReasonDustSweep = "dust_sweep"
+)
 
 type FillListResponse struct {
 	Fills  []Fill `json:"fills"`

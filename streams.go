@@ -1208,6 +1208,7 @@ func fillFromRecordedEvent(ev RealmEvent) Fill {
 		Tpsl:              sf.Tpsl,
 		TriggerPx:         sf.TriggerPx,
 		LiquidationKind:   sf.LiquidationKind,
+		CloseReason:       sf.CloseReason,
 	}
 }
 
