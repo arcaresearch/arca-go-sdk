@@ -300,10 +300,15 @@ const (
 type OperationState string
 
 const (
-	OpPending   OperationState = "pending"
-	OpCompleted OperationState = "completed"
-	OpFailed    OperationState = "failed"
-	OpExpired   OperationState = "expired"
+	OpPending OperationState = "pending"
+	// OpPendingReview is not finished and not progressing on its own: the
+	// platform could not settle the outcome and has set the operation aside
+	// for a person or a later venue read. It can still become completed or
+	// failed.
+	OpPendingReview OperationState = "pending_review"
+	OpCompleted     OperationState = "completed"
+	OpFailed        OperationState = "failed"
+	OpExpired       OperationState = "expired"
 )
 
 type Operation struct {
